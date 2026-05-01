@@ -619,48 +619,59 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         self.gen_btn.setEnabled(ok)
         return ok
 
-    # ── wheel solid ───────────────────────────────────────────────────────────
+    # ── wheel body (PartDesign) ───────────────────────────────────────────────
 
-    def _make_wheel(self, n, pitch, W, hub_bore, h_seg, symmetric, cx, cy):
-        """Regular polygon prism: 2*n sides.
-        Each arc link midpoint sits at R·cos(π/(2n)) from wheel centre (chord
-        midpoint, not R).  The link inner face is h_seg below that midpoint, so:
-          apothem = R·cos(π/(2n)) − h_seg
-          R_poly  = apothem / cos(π/(2n))   = R − h_seg/cos(π/(2n))
-        Vertex at -90° so the bottom face aligns with the first arc link.
-        Z reference is always the global plane (Z = 0).
-        symmetric=True:  wheel from −W/2 to +W/2 (centred on Z = 0).
-        symmetric=False: wheel from  0   to  +W  (+Z side only)."""
+    def _make_wheel_body(self, label, n, pitch, W, hub_bore, h_seg, symmetric, cx, cy):
+        """Create a PartDesign::Body with a sketch + pad so the user can keep
+        editing the wheel in the normal parametric workflow.
+
+        Profile: regular 2n-gon with optional bore circle in the same sketch.
+        Sketch placed at (cx, cy, z_offset) facing +Z.
+        symmetric=True  → z_offset = −W/2  (wheel centred on Z=0)
+        symmetric=False → z_offset =  0    (wheel starts at Z=0, extends +W)
+        """
+        doc = FreeCAD.ActiveDocument
+
         R          = pitch / (2.0 * math.sin(math.pi / (2.0 * n)))
         Rb         = hub_bore / 2.0
         n_sides    = 2 * n
-        half_angle = math.pi / n_sides           # = π/(2n)
-        link_mid_r = R * math.cos(half_angle)    # chord-midpoint distance
+        half_angle = math.pi / n_sides
+        link_mid_r = R * math.cos(half_angle)
         apothem    = link_mid_r - h_seg
         R_poly     = apothem / math.cos(half_angle)
+        z_offset   = -W / 2.0 if symmetric else 0.0
 
-        pts = []
+        body   = doc.addObject("PartDesign::Body",       label)
+        sketch = doc.addObject("Sketcher::SketchObject", label + "_Sketch")
+        body.addObject(sketch)
+
+        sketch.Placement = FreeCAD.Placement(
+            FreeCAD.Vector(cx, cy, z_offset),
+            FreeCAD.Rotation()          # XY plane, +Z normal
+        )
+
+        # polygon outline (local coords — origin = wheel centre)
         for i in range(n_sides):
-            ang = math.radians(-90.0 + i * 360.0 / n_sides)
-            pts.append(FreeCAD.Vector(R_poly * math.cos(ang), R_poly * math.sin(ang), 0))
-        pts.append(pts[0])
+            a0 = math.radians(-90.0 + i       * 360.0 / n_sides)
+            a1 = math.radians(-90.0 + (i + 1) * 360.0 / n_sides)
+            sketch.addGeometry(Part.LineSegment(
+                FreeCAD.Vector(R_poly * math.cos(a0), R_poly * math.sin(a0), 0),
+                FreeCAD.Vector(R_poly * math.cos(a1), R_poly * math.sin(a1), 0)
+            ))
 
-        wire  = Part.makePolygon(pts)
-        face  = Part.Face(wire)
-        prism = face.extrude(FreeCAD.Vector(0, 0, W))
-
-        z_offset = -W / 2.0 if symmetric else 0.0
-        mat = FreeCAD.Matrix()
-        mat.move(FreeCAD.Vector(cx, cy, z_offset))
-        prism = prism.transformGeometry(mat)
-
+        # bore circle (inner loop → Pad treats it as a through-hole)
         if Rb > 0.001:
-            bore = Part.makeCylinder(Rb, W + 2.0,
-                                     FreeCAD.Vector(cx, cy, z_offset - 1.0),
-                                     FreeCAD.Vector(0, 0, 1))
-            prism = prism.cut(bore)
+            sketch.addGeometry(
+                Part.Circle(FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(0, 0, 1), Rb)
+            )
 
-        return prism
+        pad = doc.addObject("PartDesign::Pad", label + "_Pad")
+        body.addObject(pad)
+        pad.Profile = sketch
+        pad.Length  = W
+        body.Tip    = pad
+
+        return body
 
     # ── generate ──────────────────────────────────────────────────────────────
 
@@ -747,20 +758,17 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
             created.append(feat.Label)
 
         # ── wheels ────────────────────────────────────────────────────────────
+        sym = self.check_sym.isChecked()
         for side, wx in (("Left", -half_sl), ("Right", half_sl)):
             cb = self.check_wheel_left if side == "Left" else self.check_wheel_right
             if not cb.isChecked():
                 continue
+            label = "Wheel_{}_{}-gon".format(side, 2 * n)
             try:
-                shape = self._make_wheel(n, p, W, hub, h_seg,
-                                         self.check_sym.isChecked(), wx, 0.0)
+                self._make_wheel_body(label, n, p, W, hub, h_seg, sym, wx, 0.0)
             except Exception as e:
                 QtWidgets.QMessageBox.critical(self, "Wheel Error", str(e))
                 return
-            label = "Wheel_{}_{}-gon".format(side, 2 * n)
-            feat = doc.addObject("Part::Feature", label)
-            feat.Shape = shape
-            feat.Label = label
             created.append(label)
 
         doc.recompute()
