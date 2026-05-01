@@ -191,25 +191,21 @@ _SVG_DATA_SYM = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 110
 
 _SVG_DIR  = 'dir'
 
-_SVG_DATA_DIR = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 98" font-family="system-ui,sans-serif">
-  <rect width="300" height="98" fill="#f8fafd"/>
-  <line x1="150" y1="5" x2="150" y2="95" stroke="#dde3ea" stroke-width="1"/>
+_SVG_DATA_DIR = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 92" font-family="system-ui,sans-serif">
+  <rect width="300" height="92" fill="#f8fafd"/>
+  <line x1="150" y1="5" x2="150" y2="88" stroke="#dde3ea" stroke-width="1"/>
 
-  <!-- UP: chain loop sits ABOVE -->
-  <text x="75" y="14" text-anchor="middle" font-size="11" font-weight="bold" fill="#43a047">UP</text>
-  <rect x="12" y="18" width="126" height="52" rx="26" ry="26"
+  <!-- UP: oval above the line -->
+  <text x="75" y="12" text-anchor="middle" font-size="11" font-weight="bold" fill="#43a047">UP</text>
+  <rect x="12" y="16" width="126" height="52" rx="26" ry="26"
         fill="none" stroke="#1e5d8c" stroke-width="2.5"/>
-  <!-- chain straight segments (center of oval y=44) -->
-  <line x1="2"   y1="44" x2="12"  y2="44" stroke="#1e5d8c" stroke-width="2.5" stroke-linecap="round"/>
-  <line x1="138" y1="44" x2="148" y2="44" stroke="#1e5d8c" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="45" y1="78" x2="105" y2="78" stroke="#1e5d8c" stroke-width="2.5" stroke-linecap="round"/>
 
-  <!-- DOWN: chain loop sits BELOW -->
-  <text x="225" y="14" text-anchor="middle" font-size="11" font-weight="bold" fill="#c62828">DOWN</text>
-  <rect x="162" y="40" width="126" height="52" rx="26" ry="26"
+  <!-- DOWN: oval below the line -->
+  <text x="225" y="12" text-anchor="middle" font-size="11" font-weight="bold" fill="#c62828">DOWN</text>
+  <line x1="195" y1="22" x2="255" y2="22" stroke="#1e5d8c" stroke-width="2.5" stroke-linecap="round"/>
+  <rect x="162" y="32" width="126" height="52" rx="26" ry="26"
         fill="none" stroke="#1e5d8c" stroke-width="2.5"/>
-  <!-- chain straight segments (center of oval y=66) -->
-  <line x1="152" y1="66" x2="162" y2="66" stroke="#1e5d8c" stroke-width="2.5" stroke-linecap="round"/>
-  <line x1="288" y1="66" x2="298" y2="66" stroke="#1e5d8c" stroke-width="2.5" stroke-linecap="round"/>
 </svg>"""
 
 _DIAG_SVG = {
@@ -386,27 +382,26 @@ def _mk_sym_pm():
     p.end(); return pm
 
 def _mk_dir_pm():
-    pm, p, s = _pm2(300, 98)
+    pm, p, s = _pm2(300, 92)
     CB   = QtGui.QColor(30, 93, 140)
     CUp  = QtGui.QColor(67, 160, 71)
     CDn  = QtGui.QColor(198, 40, 40)
     CSep = QtGui.QColor(220, 227, 234)
     p.setPen(QtGui.QPen(CSep, s(1)))
-    p.drawLine(s(150), s(5), s(150), s(95))
-    p.setPen(QtGui.QPen(CUp)); p.setFont(_f(s(11), bold=True))
-    p.drawText(QtCore.QRect(s(0),s(4),s(150),s(14)),_Qt_AlignCenter,"UP")
+    p.drawLine(s(150), s(5), s(150), s(88))
     pen = QtGui.QPen(CB, s(2)); pen.setCapStyle(QtCore.Qt.RoundCap)
+    # UP: oval above, line below
+    p.setPen(QtGui.QPen(CUp)); p.setFont(_f(s(11), bold=True))
+    p.drawText(QtCore.QRect(s(0),s(2),s(150),s(14)),_Qt_AlignCenter,"UP")
     p.setPen(pen); p.setBrush(QtGui.QBrush())
-    p.drawRoundedRect(QtCore.QRect(s(12),s(18),s(126),s(52)), s(26), s(26))
-    p.drawLine(s(2),s(44),s(12),s(44))
-    p.drawLine(s(138),s(44),s(148),s(44))
+    p.drawRoundedRect(QtCore.QRect(s(12),s(16),s(126),s(52)), s(26), s(26))
+    p.drawLine(s(45),s(78),s(105),s(78))
+    # DOWN: line above, oval below
     p.setPen(QtGui.QPen(CDn)); p.setFont(_f(s(11), bold=True))
-    p.drawText(QtCore.QRect(s(150),s(4),s(150),s(14)),_Qt_AlignCenter,"DOWN")
-    pen2 = QtGui.QPen(CB, s(2)); pen2.setCapStyle(QtCore.Qt.RoundCap)
-    p.setPen(pen2); p.setBrush(QtGui.QBrush())
-    p.drawRoundedRect(QtCore.QRect(s(162),s(40),s(126),s(52)), s(26), s(26))
-    p.drawLine(s(152),s(66),s(162),s(66))
-    p.drawLine(s(288),s(66),s(298),s(66))
+    p.drawText(QtCore.QRect(s(150),s(2),s(150),s(14)),_Qt_AlignCenter,"DOWN")
+    p.setPen(pen); p.setBrush(QtGui.QBrush())
+    p.drawLine(s(195),s(22),s(255),s(22))
+    p.drawRoundedRect(QtCore.QRect(s(162),s(32),s(126),s(52)), s(26), s(26))
     p.end(); return pm
 
 _DIAG_PAINTER = {
