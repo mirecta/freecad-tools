@@ -42,9 +42,26 @@ import Part
 import math
 
 try:
-    from PySide2 import QtWidgets, QtCore, QtGui
+    from PySide6 import QtWidgets, QtCore, QtGui
 except ImportError:
-    from PySide  import QtGui as QtWidgets, QtCore
+    try:
+        from PySide2 import QtWidgets, QtCore, QtGui
+    except ImportError:
+        from PySide import QtWidgets, QtCore, QtGui
+
+# Qt5/Qt6 enum compat shims (PySide6 moved enums into sub-namespaces)
+try:
+    _Qt_NoPen       = QtCore.Qt.PenStyle.NoPen
+    _Qt_DashLine    = QtCore.Qt.PenStyle.DashLine
+    _Qt_AlignCenter = QtCore.Qt.AlignmentFlag.AlignCenter
+    _Qt_AlignLeft   = QtCore.Qt.AlignmentFlag.AlignLeft
+    _Qt_Antialias   = QtGui.QPainter.RenderHint.Antialiasing
+except AttributeError:
+    _Qt_NoPen       = getattr(QtCore.Qt, 'NoPen')
+    _Qt_DashLine    = getattr(QtCore.Qt, 'DashLine')
+    _Qt_AlignCenter = getattr(QtCore.Qt, 'AlignCenter')
+    _Qt_AlignLeft   = getattr(QtCore.Qt, 'AlignLeft')
+    _Qt_Antialias   = getattr(QtGui.QPainter, 'Antialiasing')
 
 
 # ── diagram keys ─────────────────────────────────────────────────────────────
@@ -66,7 +83,7 @@ def _pm2(W, H):
     pm.setDevicePixelRatio(2.0)
     pm.fill(QtGui.QColor(248, 250, 252))
     p = QtGui.QPainter(pm)
-    p.setRenderHint(QtGui.QPainter.Antialiasing)
+    p.setRenderHint(_Qt_Antialias)
     return pm, p, lambda v: int(round(v * 2))
 
 def _f(px, bold=False, italic=False):
@@ -77,7 +94,7 @@ def _f(px, bold=False, italic=False):
     return f
 
 def _tri(p, pts, c):
-    p.setPen(QtCore.Qt.NoPen)
+    p.setPen(_Qt_NoPen)
     p.setBrush(QtGui.QBrush(c))
     p.drawPolygon(QtGui.QPolygon([QtCore.QPoint(*pt) for pt in pts]))
 
@@ -85,7 +102,7 @@ def _mk_link_pm():
     pm, p, s = _pm2(300, 88)
     CB = QtGui.QColor(144,187,216); CP = QtGui.QColor(30,93,140)
     CW = QtGui.QColor(248,250,252); CR = QtGui.QColor(198,40,40)
-    CT = QtGui.QColor(50,64,78);    NP = QtCore.Qt.NoPen
+    CT = QtGui.QColor(50,64,78);    NP = _Qt_NoPen
     p.setPen(QtGui.QPen(CP, s(2))); p.setBrush(QtGui.QBrush(CB))
     p.drawRoundedRect(s(28),s(22),s(244),s(32),s(12),s(12))
     for cx,cy in ((54,38),(246,38)):
@@ -94,25 +111,25 @@ def _mk_link_pm():
         p.setBrush(QtGui.QBrush(CW))
         p.drawEllipse(s(cx)-s(4),s(cy)-s(4),s(8),s(8))
     p.setPen(QtGui.QPen(CT)); p.setFont(_f(s(8)))
-    p.drawText(QtCore.QRect(s(24),s(4),s(60),s(13)),QtCore.Qt.AlignCenter,"Left Joint")
-    p.drawText(QtCore.QRect(s(216),s(4),s(60),s(13)),QtCore.Qt.AlignCenter,"Right Joint")
+    p.drawText(QtCore.QRect(s(24),s(4),s(60),s(13)),_Qt_AlignCenter,"Left Joint")
+    p.drawText(QtCore.QRect(s(216),s(4),s(60),s(13)),_Qt_AlignCenter,"Right Joint")
     p.setPen(QtGui.QPen(CR, s(1.5)))
     for x in (54,246): p.drawLine(s(x),s(57),s(x),s(69))
     p.drawLine(s(54),s(65),s(246),s(65))
     _tri(p,((s(54),s(65)),(s(63),s(61)),(s(63),s(69))),CR)
     _tri(p,((s(246),s(65)),(s(237),s(61)),(s(237),s(69))),CR)
     p.setPen(QtGui.QPen(CR)); p.setFont(_f(s(8),italic=True))
-    p.drawText(QtCore.QRect(s(100),s(72),s(100),s(13)),QtCore.Qt.AlignCenter,"pitch")
+    p.drawText(QtCore.QRect(s(100),s(72),s(100),s(13)),_Qt_AlignCenter,"pitch")
     p.end(); return pm
 
 def _mk_wheel_pm():
     pm, p, s = _pm2(300, 132)
     CB = QtGui.QColor(144,187,216); CP = QtGui.QColor(30,93,140)
     CW = QtGui.QColor(248,250,252); CR = QtGui.QColor(198,40,40)
-    CG = QtGui.QColor(150,150,150); NP = QtCore.Qt.NoPen
+    CG = QtGui.QColor(150,150,150); NP = _Qt_NoPen
     # front view
     p.setPen(QtGui.QPen(CG)); p.setFont(_f(s(8),italic=True))
-    p.drawText(QtCore.QRect(s(44),s(2),s(60),s(11)),QtCore.Qt.AlignCenter,"front view")
+    p.drawText(QtCore.QRect(s(44),s(2),s(60),s(11)),_Qt_AlignCenter,"front view")
     p.setPen(QtGui.QPen(CP, s(2))); p.setBrush(QtGui.QBrush(CB))
     p.drawEllipse(s(74)-s(50),s(74)-s(50),s(100),s(100))
     p.setPen(QtGui.QPen(CP, s(1.5))); p.setBrush(QtGui.QBrush(CW))
@@ -120,7 +137,7 @@ def _mk_wheel_pm():
     p.setPen(QtGui.QPen(CG, s(1)))
     p.drawLine(s(87),s(70),s(105),s(55))
     p.setPen(QtGui.QPen(CG)); p.setFont(_f(s(8)))
-    p.drawText(QtCore.QRect(s(104),s(48),s(35),s(11)),QtCore.Qt.AlignLeft,"hub ⌀")
+    p.drawText(QtCore.QRect(s(104),s(48),s(35),s(11)),_Qt_AlignLeft,"hub ⌀")
     # D arrow (front)
     p.setPen(QtGui.QPen(CR, s(1.2)))
     p.drawLine(s(127),s(24),s(140),s(24)); p.drawLine(s(127),s(124),s(140),s(124))
@@ -128,13 +145,13 @@ def _mk_wheel_pm():
     _tri(p,((s(137),s(24)),(s(133),s(34)),(s(141),s(34))),CR)
     _tri(p,((s(137),s(124)),(s(133),s(114)),(s(141),s(114))),CR)
     p.setPen(QtGui.QPen(CR)); p.setFont(_f(s(11),bold=True))
-    p.drawText(QtCore.QRect(s(141),s(68),s(14),s(18)),QtCore.Qt.AlignCenter,"D")
+    p.drawText(QtCore.QRect(s(141),s(68),s(14),s(18)),_Qt_AlignCenter,"D")
     # side view
     p.setPen(QtGui.QPen(CG)); p.setFont(_f(s(8),italic=True))
-    p.drawText(QtCore.QRect(s(198),s(2),s(60),s(11)),QtCore.Qt.AlignCenter,"side view")
+    p.drawText(QtCore.QRect(s(198),s(2),s(60),s(11)),_Qt_AlignCenter,"side view")
     p.setPen(QtGui.QPen(CP, s(2))); p.setBrush(QtGui.QBrush(CB))
     p.drawRect(s(202),s(24),s(52),s(100))
-    dp = QtGui.QPen(CP, s(1)); dp.setStyle(QtCore.Qt.DashLine)
+    dp = QtGui.QPen(CP, s(1)); dp.setStyle(_Qt_DashLine)
     p.setPen(dp); p.setBrush(QtGui.QBrush(CW))
     p.drawRect(s(202),s(61),s(52),s(26))
     # W arrow
@@ -144,7 +161,7 @@ def _mk_wheel_pm():
     _tri(p,((s(202),s(14)),(s(211),s(10)),(s(211),s(18))),CR)
     _tri(p,((s(254),s(14)),(s(245),s(10)),(s(245),s(18))),CR)
     p.setPen(QtGui.QPen(CR)); p.setFont(_f(s(10),bold=True))
-    p.drawText(QtCore.QRect(s(218),s(6),s(20),s(12)),QtCore.Qt.AlignCenter,"W")
+    p.drawText(QtCore.QRect(s(218),s(6),s(20),s(12)),_Qt_AlignCenter,"W")
     # D arrow (side)
     p.setPen(QtGui.QPen(CR, s(1.2)))
     p.drawLine(s(259),s(24),s(272),s(24)); p.drawLine(s(259),s(124),s(272),s(124))
@@ -152,13 +169,13 @@ def _mk_wheel_pm():
     _tri(p,((s(269),s(24)),(s(265),s(34)),(s(273),s(34))),CR)
     _tri(p,((s(269),s(124)),(s(265),s(114)),(s(273),s(114))),CR)
     p.setPen(QtGui.QPen(CR)); p.setFont(_f(s(11),bold=True))
-    p.drawText(QtCore.QRect(s(274),s(68),s(14),s(18)),QtCore.Qt.AlignCenter,"D")
+    p.drawText(QtCore.QRect(s(274),s(68),s(14),s(18)),_Qt_AlignCenter,"D")
     p.end(); return pm
 
 def _mk_h_pm():
     pm, p, s = _pm2(280, 90)
     CB = QtGui.QColor(144,187,216); CP = QtGui.QColor(30,93,140)
-    CW = QtGui.QColor(248,250,252); CR = QtGui.QColor(198,40,40); NP = QtCore.Qt.NoPen
+    CW = QtGui.QColor(248,250,252); CR = QtGui.QColor(198,40,40); NP = _Qt_NoPen
     p.setPen(QtGui.QPen(CP, s(1.5))); p.setBrush(QtGui.QBrush(CB))
     p.drawRoundedRect(s(26),s(25),s(210),s(40),s(10),s(10))
     for cx,cy in ((52,45),(210,45)):
@@ -172,19 +189,19 @@ def _mk_h_pm():
     _tri(p,((s(251),s(25)),(s(247),s(36)),(s(255),s(36))),CR)
     _tri(p,((s(251),s(65)),(s(247),s(54)),(s(255),s(54))),CR)
     p.setPen(QtGui.QPen(CR)); p.setFont(_f(s(13),bold=True))
-    p.drawText(QtCore.QRect(s(260),s(39),s(16),s(18)),QtCore.Qt.AlignCenter,"H")
+    p.drawText(QtCore.QRect(s(260),s(39),s(16),s(18)),_Qt_AlignCenter,"H")
     p.end(); return pm
 
 def _mk_dist_pm():
     pm, p, s = _pm2(300, 90)
     CB = QtGui.QColor(144,187,216); CP = QtGui.QColor(30,93,140)
-    CW = QtGui.QColor(248,250,252); CR = QtGui.QColor(198,40,40); NP = QtCore.Qt.NoPen
+    CW = QtGui.QColor(248,250,252); CR = QtGui.QColor(198,40,40); NP = _Qt_NoPen
     for cx,cy,ro,ri in ((55,42,28,7),(245,42,28,7)):
         p.setPen(QtGui.QPen(CP, s(1.5))); p.setBrush(QtGui.QBrush(CB))
         p.drawEllipse(s(cx)-s(ro),s(cy)-s(ro),s(ro*2),s(ro*2))
         p.setPen(QtGui.QPen(CP, s(1))); p.setBrush(QtGui.QBrush(CW))
         p.drawEllipse(s(cx)-s(ri),s(cy)-s(ri),s(ri*2),s(ri*2))
-    dp = QtGui.QPen(CP, s(2)); dp.setStyle(QtCore.Qt.DashLine)
+    dp = QtGui.QPen(CP, s(2)); dp.setStyle(_Qt_DashLine)
     p.setPen(dp)
     p.drawLine(s(55),s(14),s(245),s(14)); p.drawLine(s(55),s(70),s(245),s(70))
     p.setPen(QtGui.QPen(CR, s(1.5)))
@@ -193,26 +210,26 @@ def _mk_dist_pm():
     _tri(p,((s(55),s(82)),(s(65),s(78)),(s(65),s(86))),CR)
     _tri(p,((s(245),s(82)),(s(235),s(78)),(s(235),s(86))),CR)
     p.setPen(QtGui.QPen(CR)); p.setFont(_f(s(9),italic=True))
-    p.drawText(QtCore.QRect(s(100),s(73),s(100),s(12)),QtCore.Qt.AlignCenter,"distance")
+    p.drawText(QtCore.QRect(s(100),s(73),s(100),s(12)),_Qt_AlignCenter,"distance")
     p.end(); return pm
 
 def _mk_sym_pm():
     pm, p, s = _pm2(300, 110)
     CB = QtGui.QColor(144,187,216); CP = QtGui.QColor(30,93,140)
     CR = QtGui.QColor(198,40,40);   CG = QtGui.QColor(150,150,150)
-    NP = QtCore.Qt.NoPen
+    NP = _Qt_NoPen
     p.setPen(QtGui.QPen(CG)); p.setFont(_f(s(8),italic=True))
-    p.drawText(QtCore.QRect(s(32),s(2),s(80),s(11)),QtCore.Qt.AlignCenter,"symmetric")
-    p.drawText(QtCore.QRect(s(188),s(2),s(80),s(11)),QtCore.Qt.AlignCenter,"one-sided")
+    p.drawText(QtCore.QRect(s(32),s(2),s(80),s(11)),_Qt_AlignCenter,"symmetric")
+    p.drawText(QtCore.QRect(s(188),s(2),s(80),s(11)),_Qt_AlignCenter,"one-sided")
     for x0 in (32, 188):
         p.setPen(QtGui.QPen(CP, s(1.5))); p.setBrush(QtGui.QBrush(CB))
         p.drawRect(s(x0),s(20),s(80),s(60))
     # Z=0 dashed lines
     for xz,label in ((72,"Z=0"),(188,"Z=0")):
-        dp = QtGui.QPen(CR, s(1.5)); dp.setStyle(QtCore.Qt.DashLine); p.setPen(dp)
+        dp = QtGui.QPen(CR, s(1.5)); dp.setStyle(_Qt_DashLine); p.setPen(dp)
         p.drawLine(s(xz),s(14),s(xz),s(92))
         p.setPen(QtGui.QPen(CR)); p.setFont(_f(s(7)))
-        p.drawText(QtCore.QRect(s(xz)-s(7),s(7),s(14),s(9)),QtCore.Qt.AlignCenter,label)
+        p.drawText(QtCore.QRect(s(xz)-s(7),s(7),s(14),s(9)),_Qt_AlignCenter,label)
     # symmetric W/2+W/2 annotation
     p.setPen(QtGui.QPen(CR, s(1.2)))
     p.drawLine(s(32),s(88),s(112),s(88))
@@ -222,8 +239,8 @@ def _mk_sym_pm():
     _tri(p,((s(72),s(88)),(s(81),s(84)),(s(81),s(92))),CR)
     _tri(p,((s(112),s(88)),(s(103),s(84)),(s(103),s(92))),CR)
     p.setPen(QtGui.QPen(CR)); p.setFont(_f(s(8)))
-    p.drawText(QtCore.QRect(s(35),s(93),s(32),s(12)),QtCore.Qt.AlignCenter,"W/2")
-    p.drawText(QtCore.QRect(s(75),s(93),s(32),s(12)),QtCore.Qt.AlignCenter,"W/2")
+    p.drawText(QtCore.QRect(s(35),s(93),s(32),s(12)),_Qt_AlignCenter,"W/2")
+    p.drawText(QtCore.QRect(s(75),s(93),s(32),s(12)),_Qt_AlignCenter,"W/2")
     # one-sided W annotation
     p.setPen(QtGui.QPen(CR, s(1.2)))
     p.drawLine(s(188),s(88),s(268),s(88))
@@ -231,7 +248,7 @@ def _mk_sym_pm():
     _tri(p,((s(188),s(88)),(s(197),s(84)),(s(197),s(92))),CR)
     _tri(p,((s(268),s(88)),(s(259),s(84)),(s(259),s(92))),CR)
     p.setPen(QtGui.QPen(CR)); p.setFont(_f(s(8)))
-    p.drawText(QtCore.QRect(s(215),s(93),s(22),s(12)),QtCore.Qt.AlignCenter,"W")
+    p.drawText(QtCore.QRect(s(215),s(93),s(22),s(12)),_Qt_AlignCenter,"W")
     p.end(); return pm
 
 
@@ -255,7 +272,7 @@ def _diagram_row(key, *_):
         return None
     lbl = QtWidgets.QLabel()
     lbl.setPixmap(pm)
-    lbl.setAlignment(QtCore.Qt.AlignCenter)
+    lbl.setAlignment(_Qt_AlignCenter)
     row = QtWidgets.QHBoxLayout()
     row.addStretch(); row.addWidget(lbl); row.addStretch()
     return row
@@ -284,9 +301,9 @@ class _SvgTip(QtWidgets.QFrame):
             "QFrame { background:#fffef5; border:1px solid #c8a44a; border-radius:6px; }"
         )
         self._img = QtWidgets.QLabel()
-        self._img.setAlignment(QtCore.Qt.AlignCenter)
+        self._img.setAlignment(_Qt_AlignCenter)
         self._cap = QtWidgets.QLabel()
-        self._cap.setAlignment(QtCore.Qt.AlignCenter)
+        self._cap.setAlignment(_Qt_AlignCenter)
         self._cap.setStyleSheet(
             "color:#333; font-size:11px; padding:0 6px 4px; border:none;"
         )
@@ -308,7 +325,10 @@ class _SvgTip(QtWidgets.QFrame):
             self._cap.hide()
         self.adjustSize()
         gp  = widget.mapToGlobal(QtCore.QPoint(widget.width() + 10, 0))
-        scr = QtWidgets.QApplication.desktop().availableGeometry(widget)
+        try:
+            scr = widget.screen().availableGeometry()
+        except Exception:
+            scr = QtWidgets.QApplication.primaryScreen().availableGeometry()
         if gp.x() + self.width() > scr.right():
             gp = widget.mapToGlobal(QtCore.QPoint(0, widget.height() + 6))
         self.move(gp)
@@ -441,7 +461,7 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         dir_lay.addWidget(self.radio_up)
         dir_lay.addWidget(self.radio_down)
         self.dir_diagram = QtWidgets.QLabel()
-        self.dir_diagram.setAlignment(QtCore.Qt.AlignCenter)
+        self.dir_diagram.setAlignment(_Qt_AlignCenter)
         self.dir_diagram.setStyleSheet(
             "font-family:monospace; font-size:11px; color:#333;"
             "background:#f5f5f5; border:1px solid #ccc; border-radius:4px; padding:4px;"
