@@ -72,6 +72,8 @@ class _WheelDiagram(QtWidgets.QWidget):
         WH     = QtGui.QColor(248, 250,  252)
         DASH   = QtGui.QColor(140, 140,  140)
 
+        qp.fillRect(self.rect(), WH)
+
         R = 44; cy = H // 2 + 4
 
         # ── LEFT: front face ──────────────────────────────────────────────
@@ -160,6 +162,8 @@ class _LinkHeightDiagram(QtWidgets.QWidget):
         DIM    = QtGui.QColor(198, 40,   40)
         TXT    = QtGui.QColor(80,  80,   80)
         WH     = QtGui.QColor(248, 250,  252)
+
+        qp.fillRect(self.rect(), WH)
 
         bh = 30; bw = 190; bx = (W - bw)//2; by = (H - bh)//2
         qp.setBrush(FILL); qp.setPen(QtGui.QPen(STR, 2))

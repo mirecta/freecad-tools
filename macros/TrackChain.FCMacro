@@ -53,6 +53,8 @@ class _LinkDiagram(QtWidgets.QWidget):
         TXT    = QtGui.QColor(50,  60,   70)
         WH     = QtGui.QColor(248, 250,  252)
 
+        qp.fillRect(self.rect(), WH)
+
         # body
         pad = 28; bh = 34; bx = pad; bw = W - 2*pad; by = 18
         qp.setBrush(FILL); qp.setPen(QtGui.QPen(STR, 2))
