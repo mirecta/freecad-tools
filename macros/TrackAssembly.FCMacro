@@ -47,194 +47,221 @@ except ImportError:
     from PySide  import QtGui as QtWidgets, QtCore
 
 
-# ── SVG diagrams ──────────────────────────────────────────────────────────────
+# ── diagram keys ─────────────────────────────────────────────────────────────
+# These short strings identify diagram types; QPainter draws them at runtime.
 
-_SVG_LINK = """\
-<svg xmlns="http://www.w3.org/2000/svg" width="300" height="88">
-  <rect width="300" height="88" fill="#f8fafc" rx="4"/>
-  <!-- body -->
-  <rect x="28" y="22" width="244" height="32" rx="12"
-        fill="#90bbd8" stroke="#1e5d8c" stroke-width="2"/>
-  <!-- left hole -->
-  <circle cx="54"  cy="38" r="11" fill="#1e5d8c"/>
-  <circle cx="54"  cy="38" r="4"  fill="#f8fafc"/>
-  <!-- right hole -->
-  <circle cx="246" cy="38" r="11" fill="#1e5d8c"/>
-  <circle cx="246" cy="38" r="4"  fill="#f8fafc"/>
-  <!-- labels -->
-  <text x="54"  y="15" text-anchor="middle"
-        font-family="system-ui,sans-serif" font-size="10" fill="#32404e">Left Joint</text>
-  <text x="246" y="15" text-anchor="middle"
-        font-family="system-ui,sans-serif" font-size="10" fill="#32404e">Right Joint</text>
-  <!-- pitch arrow -->
-  <line x1="54"  y1="57" x2="54"  y2="69" stroke="#c62828" stroke-width="1.5"/>
-  <line x1="246" y1="57" x2="246" y2="69" stroke="#c62828" stroke-width="1.5"/>
-  <line x1="54"  y1="65" x2="246" y2="65" stroke="#c62828" stroke-width="1.5"/>
-  <polygon points="54,65  63,61  63,69"  fill="#c62828"/>
-  <polygon points="246,65 237,61 237,69" fill="#c62828"/>
-  <text x="150" y="82" text-anchor="middle"
-        font-family="system-ui,sans-serif" font-size="10" font-style="italic"
-        fill="#c62828">pitch</text>
-</svg>"""
+_SVG_LINK  = 'link'
+_SVG_WHEEL = 'wheel'
 
-_SVG_WHEEL = """\
-<svg xmlns="http://www.w3.org/2000/svg" width="300" height="132">
-  <rect width="300" height="132" fill="#f8fafc" rx="4"/>
-  <!-- front view label -->
-  <text x="74" y="13" text-anchor="middle"
-        font-family="system-ui,sans-serif" font-size="9" font-style="italic" fill="#999">front view</text>
-  <!-- wheel circle -->
-  <circle cx="74" cy="74" r="50" fill="#90bbd8" stroke="#1e5d8c" stroke-width="2"/>
-  <!-- hub bore -->
-  <circle cx="74" cy="74" r="13" fill="#f8fafc" stroke="#1e5d8c" stroke-width="1.5"/>
-  <!-- hub label -->
-  <line x1="87" y1="70" x2="105" y2="55" stroke="#666" stroke-width="1"/>
-  <text x="107" y="53" font-family="system-ui,sans-serif" font-size="9" fill="#555">hub ⌀</text>
-  <!-- D arrow right of front -->
-  <line x1="127" y1="24"  x2="140" y2="24"  stroke="#c62828" stroke-width="1.2"/>
-  <line x1="127" y1="124" x2="140" y2="124" stroke="#c62828" stroke-width="1.2"/>
-  <line x1="137" y1="24"  x2="137" y2="124" stroke="#c62828" stroke-width="1.5"/>
-  <polygon points="137,24  133,34  141,34"  fill="#c62828"/>
-  <polygon points="137,124 133,114 141,114" fill="#c62828"/>
-  <text x="145" y="78" font-family="system-ui,sans-serif" font-size="12"
-        font-weight="bold" fill="#c62828">D</text>
-  <!-- side view label -->
-  <text x="228" y="13" text-anchor="middle"
-        font-family="system-ui,sans-serif" font-size="9" font-style="italic" fill="#999">side view</text>
-  <!-- wheel rect -->
-  <rect x="202" y="24" width="52" height="100"
-        fill="#90bbd8" stroke="#1e5d8c" stroke-width="2"/>
-  <!-- hub bore dashed -->
-  <rect x="202" y="61" width="52" height="26"
-        fill="#f8fafc" stroke="#1e5d8c" stroke-width="1" stroke-dasharray="3,2"/>
-  <!-- W arrow above side -->
-  <line x1="202" y1="14" x2="254" y2="14" stroke="#c62828" stroke-width="1.5"/>
-  <line x1="202" y1="10" x2="202" y2="20" stroke="#c62828" stroke-width="1.5"/>
-  <line x1="254" y1="10" x2="254" y2="20" stroke="#c62828" stroke-width="1.5"/>
-  <polygon points="202,14 211,10 211,18" fill="#c62828"/>
-  <polygon points="254,14 245,10 245,18" fill="#c62828"/>
-  <text x="228" y="11" text-anchor="middle" font-family="system-ui,sans-serif"
-        font-size="11" font-weight="bold" fill="#c62828">W</text>
-  <!-- D arrow right of side -->
-  <line x1="259" y1="24"  x2="272" y2="24"  stroke="#c62828" stroke-width="1.2"/>
-  <line x1="259" y1="124" x2="272" y2="124" stroke="#c62828" stroke-width="1.2"/>
-  <line x1="269" y1="24"  x2="269" y2="124" stroke="#c62828" stroke-width="1.5"/>
-  <polygon points="269,24  265,34  273,34"  fill="#c62828"/>
-  <polygon points="269,124 265,114 273,114" fill="#c62828"/>
-  <text x="277" y="78" font-family="system-ui,sans-serif" font-size="12"
-        font-weight="bold" fill="#c62828">D</text>
-</svg>"""
+_SVG_H     = 'h'
+_SVG_DIST  = 'dist'
+_SVG_SYM   = 'sym'
 
 
-def _svg_label(svg_str, w, h):
-    """Render SVG string to a QLabel via QSvgRenderer. Returns None if unavailable."""
-    try:
-        from PySide2.QtSvg import QSvgRenderer
-        from PySide2.QtGui import QImage, QPainter, QPixmap
-        from PySide2.QtCore import QByteArray
-    except ImportError:
+# ── QPainter diagram drawing ──────────────────────────────────────────────────
+
+def _pm2(W, H):
+    """2× pixmap + antialiased painter + int-scale helper."""
+    pm = QtGui.QPixmap(W * 2, H * 2)
+    pm.setDevicePixelRatio(2.0)
+    pm.fill(QtGui.QColor(248, 250, 252))
+    p = QtGui.QPainter(pm)
+    p.setRenderHint(QtGui.QPainter.Antialiasing)
+    return pm, p, lambda v: int(round(v * 2))
+
+def _f(px, bold=False, italic=False):
+    f = QtGui.QFont()
+    f.setPixelSize(px)
+    f.setBold(bold)
+    f.setItalic(italic)
+    return f
+
+def _tri(p, pts, c):
+    p.setPen(QtCore.Qt.NoPen)
+    p.setBrush(QtGui.QBrush(c))
+    p.drawPolygon(QtGui.QPolygon([QtCore.QPoint(*pt) for pt in pts]))
+
+def _mk_link_pm():
+    pm, p, s = _pm2(300, 88)
+    CB = QtGui.QColor(144,187,216); CP = QtGui.QColor(30,93,140)
+    CW = QtGui.QColor(248,250,252); CR = QtGui.QColor(198,40,40)
+    CT = QtGui.QColor(50,64,78);    NP = QtCore.Qt.NoPen
+    p.setPen(QtGui.QPen(CP, s(2))); p.setBrush(QtGui.QBrush(CB))
+    p.drawRoundedRect(s(28),s(22),s(244),s(32),s(12),s(12))
+    for cx,cy in ((54,38),(246,38)):
+        p.setPen(NP); p.setBrush(QtGui.QBrush(CP))
+        p.drawEllipse(s(cx)-s(11),s(cy)-s(11),s(22),s(22))
+        p.setBrush(QtGui.QBrush(CW))
+        p.drawEllipse(s(cx)-s(4),s(cy)-s(4),s(8),s(8))
+    p.setPen(QtGui.QPen(CT)); p.setFont(_f(s(8)))
+    p.drawText(QtCore.QRect(s(24),s(4),s(60),s(13)),QtCore.Qt.AlignCenter,"Left Joint")
+    p.drawText(QtCore.QRect(s(216),s(4),s(60),s(13)),QtCore.Qt.AlignCenter,"Right Joint")
+    p.setPen(QtGui.QPen(CR, s(1.5)))
+    for x in (54,246): p.drawLine(s(x),s(57),s(x),s(69))
+    p.drawLine(s(54),s(65),s(246),s(65))
+    _tri(p,((s(54),s(65)),(s(63),s(61)),(s(63),s(69))),CR)
+    _tri(p,((s(246),s(65)),(s(237),s(61)),(s(237),s(69))),CR)
+    p.setPen(QtGui.QPen(CR)); p.setFont(_f(s(8),italic=True))
+    p.drawText(QtCore.QRect(s(100),s(72),s(100),s(13)),QtCore.Qt.AlignCenter,"pitch")
+    p.end(); return pm
+
+def _mk_wheel_pm():
+    pm, p, s = _pm2(300, 132)
+    CB = QtGui.QColor(144,187,216); CP = QtGui.QColor(30,93,140)
+    CW = QtGui.QColor(248,250,252); CR = QtGui.QColor(198,40,40)
+    CG = QtGui.QColor(150,150,150); NP = QtCore.Qt.NoPen
+    # front view
+    p.setPen(QtGui.QPen(CG)); p.setFont(_f(s(8),italic=True))
+    p.drawText(QtCore.QRect(s(44),s(2),s(60),s(11)),QtCore.Qt.AlignCenter,"front view")
+    p.setPen(QtGui.QPen(CP, s(2))); p.setBrush(QtGui.QBrush(CB))
+    p.drawEllipse(s(74)-s(50),s(74)-s(50),s(100),s(100))
+    p.setPen(QtGui.QPen(CP, s(1.5))); p.setBrush(QtGui.QBrush(CW))
+    p.drawEllipse(s(74)-s(13),s(74)-s(13),s(26),s(26))
+    p.setPen(QtGui.QPen(CG, s(1)))
+    p.drawLine(s(87),s(70),s(105),s(55))
+    p.setPen(QtGui.QPen(CG)); p.setFont(_f(s(8)))
+    p.drawText(QtCore.QRect(s(104),s(48),s(35),s(11)),QtCore.Qt.AlignLeft,"hub ⌀")
+    # D arrow (front)
+    p.setPen(QtGui.QPen(CR, s(1.2)))
+    p.drawLine(s(127),s(24),s(140),s(24)); p.drawLine(s(127),s(124),s(140),s(124))
+    p.setPen(QtGui.QPen(CR, s(1.5))); p.drawLine(s(137),s(24),s(137),s(124))
+    _tri(p,((s(137),s(24)),(s(133),s(34)),(s(141),s(34))),CR)
+    _tri(p,((s(137),s(124)),(s(133),s(114)),(s(141),s(114))),CR)
+    p.setPen(QtGui.QPen(CR)); p.setFont(_f(s(11),bold=True))
+    p.drawText(QtCore.QRect(s(141),s(68),s(14),s(18)),QtCore.Qt.AlignCenter,"D")
+    # side view
+    p.setPen(QtGui.QPen(CG)); p.setFont(_f(s(8),italic=True))
+    p.drawText(QtCore.QRect(s(198),s(2),s(60),s(11)),QtCore.Qt.AlignCenter,"side view")
+    p.setPen(QtGui.QPen(CP, s(2))); p.setBrush(QtGui.QBrush(CB))
+    p.drawRect(s(202),s(24),s(52),s(100))
+    dp = QtGui.QPen(CP, s(1)); dp.setStyle(QtCore.Qt.DashLine)
+    p.setPen(dp); p.setBrush(QtGui.QBrush(CW))
+    p.drawRect(s(202),s(61),s(52),s(26))
+    # W arrow
+    p.setPen(QtGui.QPen(CR, s(1.5))); p.setBrush(QtGui.QBrush(QtGui.QColor(0,0,0,0)))
+    p.drawLine(s(202),s(14),s(254),s(14))
+    p.drawLine(s(202),s(10),s(202),s(20)); p.drawLine(s(254),s(10),s(254),s(20))
+    _tri(p,((s(202),s(14)),(s(211),s(10)),(s(211),s(18))),CR)
+    _tri(p,((s(254),s(14)),(s(245),s(10)),(s(245),s(18))),CR)
+    p.setPen(QtGui.QPen(CR)); p.setFont(_f(s(10),bold=True))
+    p.drawText(QtCore.QRect(s(218),s(6),s(20),s(12)),QtCore.Qt.AlignCenter,"W")
+    # D arrow (side)
+    p.setPen(QtGui.QPen(CR, s(1.2)))
+    p.drawLine(s(259),s(24),s(272),s(24)); p.drawLine(s(259),s(124),s(272),s(124))
+    p.setPen(QtGui.QPen(CR, s(1.5))); p.drawLine(s(269),s(24),s(269),s(124))
+    _tri(p,((s(269),s(24)),(s(265),s(34)),(s(273),s(34))),CR)
+    _tri(p,((s(269),s(124)),(s(265),s(114)),(s(273),s(114))),CR)
+    p.setPen(QtGui.QPen(CR)); p.setFont(_f(s(11),bold=True))
+    p.drawText(QtCore.QRect(s(274),s(68),s(14),s(18)),QtCore.Qt.AlignCenter,"D")
+    p.end(); return pm
+
+def _mk_h_pm():
+    pm, p, s = _pm2(280, 90)
+    CB = QtGui.QColor(144,187,216); CP = QtGui.QColor(30,93,140)
+    CW = QtGui.QColor(248,250,252); CR = QtGui.QColor(198,40,40); NP = QtCore.Qt.NoPen
+    p.setPen(QtGui.QPen(CP, s(1.5))); p.setBrush(QtGui.QBrush(CB))
+    p.drawRoundedRect(s(26),s(25),s(210),s(40),s(10),s(10))
+    for cx,cy in ((52,45),(210,45)):
+        p.setPen(NP); p.setBrush(QtGui.QBrush(CP))
+        p.drawEllipse(s(cx)-s(10),s(cy)-s(10),s(20),s(20))
+        p.setBrush(QtGui.QBrush(CW))
+        p.drawEllipse(s(cx)-s(4),s(cy)-s(4),s(8),s(8))
+    p.setPen(QtGui.QPen(CR, s(1.2)))
+    p.drawLine(s(245),s(25),s(257),s(25)); p.drawLine(s(245),s(65),s(257),s(65))
+    p.setPen(QtGui.QPen(CR, s(1.5))); p.drawLine(s(251),s(27),s(251),s(63))
+    _tri(p,((s(251),s(25)),(s(247),s(36)),(s(255),s(36))),CR)
+    _tri(p,((s(251),s(65)),(s(247),s(54)),(s(255),s(54))),CR)
+    p.setPen(QtGui.QPen(CR)); p.setFont(_f(s(13),bold=True))
+    p.drawText(QtCore.QRect(s(260),s(39),s(16),s(18)),QtCore.Qt.AlignCenter,"H")
+    p.end(); return pm
+
+def _mk_dist_pm():
+    pm, p, s = _pm2(300, 90)
+    CB = QtGui.QColor(144,187,216); CP = QtGui.QColor(30,93,140)
+    CW = QtGui.QColor(248,250,252); CR = QtGui.QColor(198,40,40); NP = QtCore.Qt.NoPen
+    for cx,cy,ro,ri in ((55,42,28,7),(245,42,28,7)):
+        p.setPen(QtGui.QPen(CP, s(1.5))); p.setBrush(QtGui.QBrush(CB))
+        p.drawEllipse(s(cx)-s(ro),s(cy)-s(ro),s(ro*2),s(ro*2))
+        p.setPen(QtGui.QPen(CP, s(1))); p.setBrush(QtGui.QBrush(CW))
+        p.drawEllipse(s(cx)-s(ri),s(cy)-s(ri),s(ri*2),s(ri*2))
+    dp = QtGui.QPen(CP, s(2)); dp.setStyle(QtCore.Qt.DashLine)
+    p.setPen(dp)
+    p.drawLine(s(55),s(14),s(245),s(14)); p.drawLine(s(55),s(70),s(245),s(70))
+    p.setPen(QtGui.QPen(CR, s(1.5)))
+    p.drawLine(s(55),s(82),s(245),s(82))
+    p.drawLine(s(55),s(77),s(55),s(87)); p.drawLine(s(245),s(77),s(245),s(87))
+    _tri(p,((s(55),s(82)),(s(65),s(78)),(s(65),s(86))),CR)
+    _tri(p,((s(245),s(82)),(s(235),s(78)),(s(235),s(86))),CR)
+    p.setPen(QtGui.QPen(CR)); p.setFont(_f(s(9),italic=True))
+    p.drawText(QtCore.QRect(s(100),s(73),s(100),s(12)),QtCore.Qt.AlignCenter,"distance")
+    p.end(); return pm
+
+def _mk_sym_pm():
+    pm, p, s = _pm2(300, 110)
+    CB = QtGui.QColor(144,187,216); CP = QtGui.QColor(30,93,140)
+    CR = QtGui.QColor(198,40,40);   CG = QtGui.QColor(150,150,150)
+    NP = QtCore.Qt.NoPen
+    p.setPen(QtGui.QPen(CG)); p.setFont(_f(s(8),italic=True))
+    p.drawText(QtCore.QRect(s(32),s(2),s(80),s(11)),QtCore.Qt.AlignCenter,"symmetric")
+    p.drawText(QtCore.QRect(s(188),s(2),s(80),s(11)),QtCore.Qt.AlignCenter,"one-sided")
+    for x0 in (32, 188):
+        p.setPen(QtGui.QPen(CP, s(1.5))); p.setBrush(QtGui.QBrush(CB))
+        p.drawRect(s(x0),s(20),s(80),s(60))
+    # Z=0 dashed lines
+    for xz,label in ((72,"Z=0"),(188,"Z=0")):
+        dp = QtGui.QPen(CR, s(1.5)); dp.setStyle(QtCore.Qt.DashLine); p.setPen(dp)
+        p.drawLine(s(xz),s(14),s(xz),s(92))
+        p.setPen(QtGui.QPen(CR)); p.setFont(_f(s(7)))
+        p.drawText(QtCore.QRect(s(xz)-s(7),s(7),s(14),s(9)),QtCore.Qt.AlignCenter,label)
+    # symmetric W/2+W/2 annotation
+    p.setPen(QtGui.QPen(CR, s(1.2)))
+    p.drawLine(s(32),s(88),s(112),s(88))
+    for xt in (32,72,112): p.drawLine(s(xt),s(84),s(xt),s(92))
+    _tri(p,((s(32),s(88)),(s(41),s(84)),(s(41),s(92))),CR)
+    _tri(p,((s(72),s(88)),(s(63),s(84)),(s(63),s(92))),CR)
+    _tri(p,((s(72),s(88)),(s(81),s(84)),(s(81),s(92))),CR)
+    _tri(p,((s(112),s(88)),(s(103),s(84)),(s(103),s(92))),CR)
+    p.setPen(QtGui.QPen(CR)); p.setFont(_f(s(8)))
+    p.drawText(QtCore.QRect(s(35),s(93),s(32),s(12)),QtCore.Qt.AlignCenter,"W/2")
+    p.drawText(QtCore.QRect(s(75),s(93),s(32),s(12)),QtCore.Qt.AlignCenter,"W/2")
+    # one-sided W annotation
+    p.setPen(QtGui.QPen(CR, s(1.2)))
+    p.drawLine(s(188),s(88),s(268),s(88))
+    p.drawLine(s(188),s(84),s(188),s(92)); p.drawLine(s(268),s(84),s(268),s(92))
+    _tri(p,((s(188),s(88)),(s(197),s(84)),(s(197),s(92))),CR)
+    _tri(p,((s(268),s(88)),(s(259),s(84)),(s(259),s(92))),CR)
+    p.setPen(QtGui.QPen(CR)); p.setFont(_f(s(8)))
+    p.drawText(QtCore.QRect(s(215),s(93),s(22),s(12)),QtCore.Qt.AlignCenter,"W")
+    p.end(); return pm
+
+
+_DIAG_CACHE = {}
+_DIAG_FACTORY = {
+    'link': _mk_link_pm, 'wheel': _mk_wheel_pm,
+    'h':    _mk_h_pm,    'dist':  _mk_dist_pm,    'sym': _mk_sym_pm,
+}
+
+def _get_pm(key):
+    if key not in _DIAG_CACHE:
+        f = _DIAG_FACTORY.get(key)
+        _DIAG_CACHE[key] = f() if f else None
+    return _DIAG_CACHE[key]
+
+
+def _diagram_row(key, *_):
+    """Return a centred QHBoxLayout with the diagram, or None."""
+    pm = _get_pm(key)
+    if pm is None:
         return None
-    renderer = QSvgRenderer(QByteArray(svg_str.encode("utf-8")))
-    img = QImage(w, h, QImage.Format_ARGB32)
-    img.fill(0xFFFFFFFF)
-    p = QPainter(img)
-    renderer.render(p)
-    p.end()
     lbl = QtWidgets.QLabel()
-    lbl.setPixmap(QPixmap.fromImage(img))
+    lbl.setPixmap(pm)
     lbl.setAlignment(QtCore.Qt.AlignCenter)
-    return lbl
-
-
-def _diagram_row(svg_str, w, h):
-    """Return a QHBoxLayout with the diagram centred, or None."""
-    lbl = _svg_label(svg_str, w, h)
-    if lbl is None:
-        return None
     row = QtWidgets.QHBoxLayout()
     row.addStretch(); row.addWidget(lbl); row.addStretch()
     return row
 
 
-# ── per-parameter SVG diagrams ────────────────────────────────────────────────
-
-_SVG_H = """\
-<svg xmlns="http://www.w3.org/2000/svg" width="280" height="90">
-  <rect width="280" height="90" fill="#f8fafc" rx="4"/>
-  <rect x="26" y="25" width="210" height="40" rx="10"
-        fill="#90bbd8" stroke="#1e5d8c" stroke-width="1.5"/>
-  <circle cx="52"  cy="45" r="10" fill="#1e5d8c"/>
-  <circle cx="52"  cy="45" r="4"  fill="#f8fafc"/>
-  <circle cx="210" cy="45" r="10" fill="#1e5d8c"/>
-  <circle cx="210" cy="45" r="4"  fill="#f8fafc"/>
-  <line x1="245" y1="25" x2="257" y2="25" stroke="#c62828" stroke-width="1.2"/>
-  <line x1="245" y1="65" x2="257" y2="65" stroke="#c62828" stroke-width="1.2"/>
-  <line x1="251" y1="27" x2="251" y2="63" stroke="#c62828" stroke-width="1.5"/>
-  <polygon points="251,25 247,36 255,36" fill="#c62828"/>
-  <polygon points="251,65 247,54 255,54" fill="#c62828"/>
-  <text x="264" y="50" font-family="system-ui,sans-serif" font-size="14"
-        font-weight="bold" fill="#c62828">H</text>
-</svg>"""
-
-_SVG_DIST = """\
-<svg xmlns="http://www.w3.org/2000/svg" width="300" height="90">
-  <rect width="300" height="90" fill="#f8fafc" rx="4"/>
-  <circle cx="55"  cy="42" r="28" fill="#90bbd8" stroke="#1e5d8c" stroke-width="1.5"/>
-  <circle cx="55"  cy="42" r="7"  fill="#f8fafc" stroke="#1e5d8c" stroke-width="1"/>
-  <circle cx="245" cy="42" r="28" fill="#90bbd8" stroke="#1e5d8c" stroke-width="1.5"/>
-  <circle cx="245" cy="42" r="7"  fill="#f8fafc" stroke="#1e5d8c" stroke-width="1"/>
-  <line x1="55"  y1="14" x2="245" y2="14" stroke="#1e5d8c" stroke-width="2" stroke-dasharray="4,3"/>
-  <line x1="55"  y1="70" x2="245" y2="70" stroke="#1e5d8c" stroke-width="2" stroke-dasharray="4,3"/>
-  <line x1="55"  y1="82" x2="245" y2="82" stroke="#c62828" stroke-width="1.5"/>
-  <line x1="55"  y1="77" x2="55"  y2="87" stroke="#c62828" stroke-width="1.2"/>
-  <line x1="245" y1="77" x2="245" y2="87" stroke="#c62828" stroke-width="1.2"/>
-  <polygon points="55,82  65,78  65,86"  fill="#c62828"/>
-  <polygon points="245,82 235,78 235,86" fill="#c62828"/>
-  <text x="150" y="79" text-anchor="middle" font-family="system-ui,sans-serif"
-        font-size="10" font-style="italic" fill="#c62828">distance</text>
-</svg>"""
-
-_SVG_SYM = """\
-<svg xmlns="http://www.w3.org/2000/svg" width="300" height="110">
-  <rect width="300" height="110" fill="#f8fafc" rx="4"/>
-  <text x="72" y="12" text-anchor="middle" font-family="system-ui,sans-serif"
-        font-size="9" font-style="italic" fill="#888">symmetric</text>
-  <rect x="32" y="20" width="80" height="60" rx="3"
-        fill="#90bbd8" stroke="#1e5d8c" stroke-width="1.5"/>
-  <line x1="72" y1="50" x2="72" y2="90" stroke="#c62828" stroke-width="1.5" stroke-dasharray="3,2"/>
-  <line x1="32" y1="86" x2="112" y2="86" stroke="#c62828" stroke-width="1.2"/>
-  <line x1="32" y1="82" x2="32"  y2="90" stroke="#c62828" stroke-width="1.2"/>
-  <line x1="72" y1="82" x2="72"  y2="90" stroke="#c62828" stroke-width="1.2"/>
-  <polygon points="32,86 40,82 40,90" fill="#c62828"/>
-  <polygon points="72,86 64,82 64,90" fill="#c62828"/>
-  <text x="52" y="101" text-anchor="middle" font-family="system-ui,sans-serif"
-        font-size="9" fill="#c62828">W/2</text>
-  <line x1="72" y1="82" x2="72"  y2="90" stroke="#c62828" stroke-width="1.2"/>
-  <line x1="112" y1="82" x2="112" y2="90" stroke="#c62828" stroke-width="1.2"/>
-  <line x1="72" y1="86" x2="112" y2="86" stroke="#c62828" stroke-width="1.2"/>
-  <polygon points="112,86 104,82 104,90" fill="#c62828"/>
-  <text x="92" y="101" text-anchor="middle" font-family="system-ui,sans-serif"
-        font-size="9" fill="#c62828">W/2</text>
-  <text x="72" y="17" text-anchor="middle" font-family="system-ui,sans-serif"
-        font-size="8" fill="#c62828">Z=0</text>
-  <text x="228" y="12" text-anchor="middle" font-family="system-ui,sans-serif"
-        font-size="9" font-style="italic" fill="#888">one-sided</text>
-  <rect x="188" y="20" width="80" height="60" rx="3"
-        fill="#90bbd8" stroke="#1e5d8c" stroke-width="1.5"/>
-  <line x1="188" y1="50" x2="188" y2="90" stroke="#c62828" stroke-width="1.5" stroke-dasharray="3,2"/>
-  <line x1="188" y1="86" x2="268" y2="86" stroke="#c62828" stroke-width="1.2"/>
-  <line x1="188" y1="82" x2="188" y2="90" stroke="#c62828" stroke-width="1.2"/>
-  <line x1="268" y1="82" x2="268" y2="90" stroke="#c62828" stroke-width="1.2"/>
-  <polygon points="188,86 196,82 196,90" fill="#c62828"/>
-  <polygon points="268,86 260,82 260,90" fill="#c62828"/>
-  <text x="228" y="101" text-anchor="middle" font-family="system-ui,sans-serif"
-        font-size="9" fill="#c62828">W</text>
-  <text x="188" y="17" text-anchor="middle" font-family="system-ui,sans-serif"
-        font-size="8" fill="#c62828">Z=0</text>
-</svg>"""
-
-
-# ── SVG hover-popup tooltip ───────────────────────────────────────────────────
+# ── hover-popup tooltip ───────────────────────────────────────────────────────
 
 class _SvgTip(QtWidgets.QFrame):
     """Singleton borderless popup rendering a crisp SVG next to a hovered widget."""
@@ -304,22 +331,11 @@ class _SvgTip(QtWidgets.QFrame):
         return False
 
 
-def _attach_svg_tip(widget, svg_str, w, h, caption=""):
-    """Render svg_str at 2× DPI and attach as a hover popup to widget."""
-    try:
-        from PySide2.QtSvg import QSvgRenderer
-        from PySide2.QtGui import QImage, QPainter, QPixmap
-        from PySide2.QtCore import QByteArray
-    except ImportError:
+def _attach_svg_tip(widget, key, w=0, h=0, caption=""):
+    """Attach a QPainter-drawn diagram popup to widget on hover."""
+    pm = _get_pm(key)
+    if pm is None:
         return
-    renderer = QSvgRenderer(QByteArray(svg_str.encode("utf-8")))
-    img = QImage(w * 2, h * 2, QImage.Format_ARGB32)
-    img.fill(0xFFFFFFFF)
-    p = QPainter(img)
-    renderer.render(p)
-    p.end()
-    pm = QPixmap.fromImage(img)
-    pm.setDevicePixelRatio(2.0)
     widget.setProperty("_svgtip_pm",  pm)
     widget.setProperty("_svgtip_cap", caption)
     widget.installEventFilter(_SvgTip.get())
