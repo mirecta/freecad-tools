@@ -37,6 +37,164 @@ except ImportError:
     from PySide  import QtGui as QtWidgets, QtCore
 
 
+# ── diagrams ──────────────────────────────────────────────────────────────────
+
+class _WheelDiagram(QtWidgets.QWidget):
+    """Front face + side elevation of the wheel, labelling D, W, and hub bore."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(310, 138)
+
+    def _arrowhead(self, qp, color, x, y, dx, dy):
+        """Draw a filled arrowhead pointing in direction (dx,dy)."""
+        import math as _m
+        ln = _m.hypot(dx, dy)
+        if ln < 1: return
+        ux, uy = dx/ln, dy/ln
+        px, py = -uy, ux
+        sz = 7
+        path = QtGui.QPainterPath()
+        path.moveTo(x, y)
+        path.lineTo(x - ux*sz + px*3, y - uy*sz + py*3)
+        path.lineTo(x - ux*sz - px*3, y - uy*sz - py*3)
+        path.closeSubpath()
+        qp.fillPath(path, color)
+
+    def paintEvent(self, _ev):
+        qp = QtGui.QPainter(self)
+        qp.setRenderHint(QtGui.QPainter.Antialiasing)
+        W, H   = self.width(), self.height()
+        FILL   = QtGui.QColor(144, 187, 216)
+        STR    = QtGui.QColor(30,  93,  140)
+        DIM    = QtGui.QColor(198, 40,   40)
+        TXT    = QtGui.QColor(80,  80,   80)
+        WH     = QtGui.QColor(248, 250,  252)
+        DASH   = QtGui.QColor(140, 140,  140)
+
+        R = 44; cy = H // 2 + 4
+
+        # ── LEFT: front face ──────────────────────────────────────────────
+        cx1 = 72
+        qp.setBrush(FILL); qp.setPen(QtGui.QPen(STR, 2))
+        qp.drawEllipse(cx1 - R, cy - R, 2*R, 2*R)
+
+        br = int(R * 0.28)
+        qp.setBrush(WH); qp.setPen(QtGui.QPen(STR, 1.5))
+        qp.drawEllipse(cx1 - br, cy - br, 2*br, 2*br)
+
+        # D arrow (vertical, right of front circle)
+        dx1 = cx1 + R + 16
+        qp.setPen(QtGui.QPen(DIM, 1.5))
+        qp.drawLine(cx1 + R + 2, cy - R, dx1, cy - R)
+        qp.drawLine(cx1 + R + 2, cy + R, dx1, cy + R)
+        qp.drawLine(dx1, cy - R, dx1, cy + R)
+        self._arrowhead(qp, DIM, dx1, cy - R,  0, -1)
+        self._arrowhead(qp, DIM, dx1, cy + R,  0,  1)
+        font = QtGui.QFont(); font.setPointSize(9); font.setBold(True); qp.setFont(font)
+        qp.setPen(DIM); qp.drawText(dx1 + 4, cy + 5, "D")
+
+        # hub bore label
+        font2 = QtGui.QFont(); font2.setPointSize(8); qp.setFont(font2)
+        qp.setPen(TXT)
+        qp.drawText(cx1 + br + 4, cy - 2,  "hub")
+        qp.drawText(cx1 + br + 4, cy + 10, "bore ⌀")
+        qp.setPen(QtGui.QPen(TXT, 1))
+        qp.drawLine(cx1 + br, cy, cx1 + br + 3, cy)
+
+        font_it = QtGui.QFont(); font_it.setPointSize(8); font_it.setItalic(True)
+        qp.setFont(font_it); qp.setPen(DASH)
+        qp.drawText(cx1 - 22, 13, "front view")
+
+        # ── RIGHT: side elevation ─────────────────────────────────────────
+        Ww = 30; cx2 = W - 68
+        rx = cx2 - Ww // 2; ry = cy - R
+
+        qp.setBrush(FILL); qp.setPen(QtGui.QPen(STR, 2))
+        qp.drawRect(rx, ry, Ww, 2*R)
+
+        qp.setBrush(WH); qp.setPen(QtGui.QPen(STR, 1, QtCore.Qt.DashLine))
+        qp.drawRect(rx, cy - br, Ww, 2*br)
+
+        # W arrow (above)
+        wy = ry - 15
+        qp.setPen(QtGui.QPen(DIM, 1.5))
+        qp.drawLine(rx, wy, rx + Ww, wy)
+        qp.drawLine(rx,      wy - 4, rx,      ry - 1)
+        qp.drawLine(rx + Ww, wy - 4, rx + Ww, ry - 1)
+        self._arrowhead(qp, DIM, rx,      wy, -1, 0)
+        self._arrowhead(qp, DIM, rx + Ww, wy,  1, 0)
+        font.setPointSize(9); qp.setFont(font)
+        fm = qp.fontMetrics()
+        qp.setPen(DIM)
+        qp.drawText(cx2 - fm.width("W")//2, wy - 3, "W")
+
+        # D arrow (right of side view)
+        dx2 = cx2 + Ww//2 + 16
+        qp.setPen(QtGui.QPen(DIM, 1.5))
+        qp.drawLine(cx2 + Ww//2 + 2, cy - R, dx2, cy - R)
+        qp.drawLine(cx2 + Ww//2 + 2, cy + R, dx2, cy + R)
+        qp.drawLine(dx2, cy - R, dx2, cy + R)
+        self._arrowhead(qp, DIM, dx2, cy - R,  0, -1)
+        self._arrowhead(qp, DIM, dx2, cy + R,  0,  1)
+        qp.setPen(DIM); qp.drawText(dx2 + 4, cy + 5, "D")
+
+        qp.setFont(font_it); qp.setPen(DASH)
+        qp.drawText(cx2 - 20, 13, "side view")
+        qp.end()
+
+
+class _LinkHeightDiagram(QtWidgets.QWidget):
+    """Side cross-section of a chain link labelling body height H."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(290, 72)
+
+    def paintEvent(self, _ev):
+        qp = QtGui.QPainter(self)
+        qp.setRenderHint(QtGui.QPainter.Antialiasing)
+        W, H   = self.width(), self.height()
+        FILL   = QtGui.QColor(144, 187, 216)
+        STR    = QtGui.QColor(30,  93,  140)
+        DIM    = QtGui.QColor(198, 40,   40)
+        TXT    = QtGui.QColor(80,  80,   80)
+        WH     = QtGui.QColor(248, 250,  252)
+
+        bh = 30; bw = 190; bx = (W - bw)//2; by = (H - bh)//2
+        qp.setBrush(FILL); qp.setPen(QtGui.QPen(STR, 2))
+        qp.drawRect(bx, by, bw, bh)
+
+        pr = 9; cy2 = by + bh//2
+        for jx in (bx + pr + 4, bx + bw - pr - 4):
+            qp.setBrush(STR); qp.setPen(QtCore.Qt.NoPen)
+            qp.drawEllipse(jx - pr, cy2 - pr, pr*2, pr*2)
+            qp.setBrush(WH)
+            qp.drawEllipse(jx - 4,  cy2 - 4,  8,    8)
+
+        # H arrow (right side)
+        hx = bx + bw + 20
+        qp.setPen(QtGui.QPen(DIM, 1.5))
+        qp.drawLine(bx + bw + 3, by,      hx, by)
+        qp.drawLine(bx + bw + 3, by + bh, hx, by + bh)
+        qp.drawLine(hx, by, hx, by + bh)
+        for ay, sg in ((by, 1), (by + bh, -1)):
+            path = QtGui.QPainterPath()
+            path.moveTo(hx, ay)
+            path.lineTo(hx - 3, ay + sg*8)
+            path.lineTo(hx + 3, ay + sg*8)
+            path.closeSubpath()
+            qp.fillPath(path, DIM)
+        font = QtGui.QFont(); font.setPointSize(9); font.setBold(True); qp.setFont(font)
+        qp.setPen(DIM); qp.drawText(hx + 4, cy2 + 5, "H")
+
+        font2 = QtGui.QFont(); font2.setPointSize(8); qp.setFont(font2)
+        qp.setPen(TXT)
+        fm = qp.fontMetrics(); lbl = "link body (side view)"
+        qp.drawText(bx + bw//2 - fm.width(lbl)//2, by - 4, lbl)
+        qp.end()
+
+
 # ── dialog ────────────────────────────────────────────────────────────────────
 
 class WheelDialog(QtWidgets.QDialog):
@@ -135,7 +293,11 @@ class WheelDialog(QtWidgets.QDialog):
 
         # ── link body ─────────────────────────────────────────────────────────
         body_grp = QtWidgets.QGroupBox("Link body")
-        bf = QtWidgets.QFormLayout(body_grp)
+        bv = QtWidgets.QVBoxLayout(body_grp)
+        lhd_row = QtWidgets.QHBoxLayout()
+        lhd_row.addStretch(); lhd_row.addWidget(_LinkHeightDiagram()); lhd_row.addStretch()
+        bv.addLayout(lhd_row)
+        bf = QtWidgets.QFormLayout()
 
         self.spin_H = QtWidgets.QDoubleSpinBox()
         self.spin_H.setRange(0.1, 9999.0)
@@ -148,6 +310,7 @@ class WheelDialog(QtWidgets.QDialog):
         hint_h = QtWidgets.QLabel("height of the link body (drives minimum wheel diameter)")
         hint_h.setStyleSheet("color:gray; font-size:10px;")
         bf.addRow("", hint_h)
+        bv.addLayout(bf)
 
         root.addWidget(body_grp)
 
@@ -155,7 +318,11 @@ class WheelDialog(QtWidgets.QDialog):
 
         # ── wheel dimensions ──────────────────────────────────────────────────
         wheel_grp = QtWidgets.QGroupBox("Wheel dimensions")
-        wf = QtWidgets.QFormLayout(wheel_grp)
+        wv = QtWidgets.QVBoxLayout(wheel_grp)
+        wd_row = QtWidgets.QHBoxLayout()
+        wd_row.addStretch(); wd_row.addWidget(_WheelDiagram()); wd_row.addStretch()
+        wv.addLayout(wd_row)
+        wf = QtWidgets.QFormLayout()
 
         self.spin_D = QtWidgets.QDoubleSpinBox()
         self.spin_D.setRange(1.0, 99999.0)
@@ -184,6 +351,7 @@ class WheelDialog(QtWidgets.QDialog):
         hint_hub = QtWidgets.QLabel("0 = solid wheel (no bore)")
         hint_hub.setStyleSheet("color:gray; font-size:10px;")
         wf.addRow("", hint_hub)
+        wv.addLayout(wf)
 
         root.addWidget(wheel_grp)
 

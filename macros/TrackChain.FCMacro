@@ -34,6 +34,65 @@ except ImportError:
     from PySide  import QtGui as QtWidgets, QtCore
 
 
+# ── diagrams ──────────────────────────────────────────────────────────────────
+
+class _LinkDiagram(QtWidgets.QWidget):
+    """Top-down view of a chain link labelling Left Joint, Right Joint, pitch."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(300, 86)
+
+    def paintEvent(self, _ev):
+        qp = QtGui.QPainter(self)
+        qp.setRenderHint(QtGui.QPainter.Antialiasing)
+        W, H   = self.width(), self.height()
+        FILL   = QtGui.QColor(144, 187, 216)
+        STR    = QtGui.QColor(30,  93,  140)
+        DIM    = QtGui.QColor(198, 40,   40)
+        TXT    = QtGui.QColor(50,  60,   70)
+        WH     = QtGui.QColor(248, 250,  252)
+
+        # body
+        pad = 28; bh = 34; bx = pad; bw = W - 2*pad; by = 18
+        qp.setBrush(FILL); qp.setPen(QtGui.QPen(STR, 2))
+        qp.drawRoundedRect(bx, by, bw, bh, 13, 13)
+
+        # joint holes
+        jr = 10; cy = by + bh // 2
+        lx = bx + jr + 8; rx = bx + bw - jr - 8
+        for jx in (lx, rx):
+            qp.setBrush(STR); qp.setPen(QtCore.Qt.NoPen)
+            qp.drawEllipse(jx - jr, cy - jr, jr*2, jr*2)
+            qp.setBrush(WH)
+            qp.drawEllipse(jx - 4,  cy - 4,  8,    8)
+
+        # labels above holes
+        font = QtGui.QFont(); font.setPointSize(8); qp.setFont(font)
+        fm = qp.fontMetrics()
+        qp.setPen(TXT)
+        for jx, txt in ((lx, "Left Joint"), (rx, "Right Joint")):
+            qp.drawText(jx - fm.width(txt)//2, by - 4, txt)
+
+        # pitch arrow below body
+        ay = by + bh + 12
+        qp.setPen(QtGui.QPen(DIM, 1.5))
+        for jx in (lx, rx):
+            qp.drawLine(jx, by + bh + 3, jx, ay - 2)
+        qp.drawLine(lx + 9, ay, rx - 9, ay)
+        for jx, sg in ((lx, 1), (rx, -1)):
+            path = QtGui.QPainterPath()
+            path.moveTo(jx, ay)
+            path.lineTo(jx + sg*9, ay - 3)
+            path.lineTo(jx + sg*9, ay + 3)
+            path.closeSubpath()
+            qp.fillPath(path, DIM)
+        qp.setPen(DIM)
+        lbl = "pitch"
+        qp.drawText((lx + rx)//2 - fm.width(lbl)//2, ay + 13, lbl)
+        qp.end()
+
+
 # ── dialog ────────────────────────────────────────────────────────────────────
 
 class TrackChainDialog(QtWidgets.QDialog):
@@ -73,7 +132,11 @@ class TrackChainDialog(QtWidgets.QDialog):
 
         # ── joint pickers ─────────────────────────────────────────────────────
         joints_grp = QtWidgets.QGroupBox("Joint connection points")
-        jg = QtWidgets.QGridLayout(joints_grp)
+        jv = QtWidgets.QVBoxLayout(joints_grp)
+        diag_row = QtWidgets.QHBoxLayout()
+        diag_row.addStretch(); diag_row.addWidget(_LinkDiagram()); diag_row.addStretch()
+        jv.addLayout(diag_row)
+        jg = QtWidgets.QGridLayout()
         jg.setColumnStretch(1, 1)
 
         self.left_icon   = QtWidgets.QLabel("○")
@@ -100,6 +163,7 @@ class TrackChainDialog(QtWidgets.QDialog):
         jg.addWidget(self.right_icon,  1, 0)
         jg.addWidget(self.right_coords,1, 1)
         jg.addWidget(self.btn_right,   1, 2)
+        jv.addLayout(jg)
         root.addWidget(joints_grp)
 
         self.pitch_label = QtWidgets.QLabel("Pitch: —")
