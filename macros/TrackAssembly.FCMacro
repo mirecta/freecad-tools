@@ -77,7 +77,13 @@ except ImportError:
 
 # ── embedded SVG diagrams ─────────────────────────────────────────────────────
 
-_SVG_LINK = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 88" font-family="system-ui,sans-serif">
+_SVG_LINK  = 'link'
+_SVG_WHEEL = 'wheel'
+_SVG_H     = 'h'
+_SVG_DIST  = 'dist'
+_SVG_SYM   = 'sym'
+
+_SVG_DATA_LINK = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 88" font-family="system-ui,sans-serif">
   <rect width="300" height="88" fill="#f8fafd"/>
   <rect x="28" y="22" width="244" height="32" rx="12" ry="12" fill="#90bbd8" stroke="#1e5d8c" stroke-width="2"/>
   <circle cx="54"  cy="38" r="11" fill="#1e5d8c"/>
@@ -94,7 +100,7 @@ _SVG_LINK = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 88" fon
   <text x="150" y="80" text-anchor="middle" font-size="8" font-style="italic" fill="#c62828">pitch</text>
 </svg>"""
 
-_SVG_WHEEL = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 132" font-family="system-ui,sans-serif">
+_SVG_DATA_WHEEL = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 132" font-family="system-ui,sans-serif">
   <rect width="300" height="132" fill="#f8fafd"/>
   <text x="74"  y="11" text-anchor="middle" font-size="8" font-style="italic" fill="#969696">front view</text>
   <circle cx="74" cy="74" r="50" fill="#90bbd8" stroke="#1e5d8c" stroke-width="2"/>
@@ -124,7 +130,7 @@ _SVG_WHEEL = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 132" f
   <text x="281" y="79" text-anchor="middle" font-size="11" font-weight="bold" fill="#c62828">D</text>
 </svg>"""
 
-_SVG_H = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 90" font-family="system-ui,sans-serif">
+_SVG_DATA_H = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 90" font-family="system-ui,sans-serif">
   <rect width="280" height="90" fill="#f8fafd"/>
   <rect x="26" y="25" width="210" height="40" rx="10" ry="10" fill="#90bbd8" stroke="#1e5d8c" stroke-width="1.5"/>
   <circle cx="52"  cy="45" r="10" fill="#1e5d8c"/>
@@ -139,7 +145,7 @@ _SVG_H = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 90" font-f
   <text x="264" y="51" text-anchor="middle" font-size="13" font-weight="bold" fill="#c62828">H</text>
 </svg>"""
 
-_SVG_DIST = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 90" font-family="system-ui,sans-serif">
+_SVG_DATA_DIST = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 90" font-family="system-ui,sans-serif">
   <rect width="300" height="90" fill="#f8fafd"/>
   <circle cx="55"  cy="42" r="28" fill="#90bbd8" stroke="#1e5d8c" stroke-width="1.5"/>
   <circle cx="55"  cy="42" r="7"  fill="#f8fafd" stroke="#1e5d8c" stroke-width="1"/>
@@ -155,7 +161,7 @@ _SVG_DIST = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 90" fon
   <text x="150" y="79" text-anchor="middle" font-size="9" font-style="italic" fill="#c62828">distance</text>
 </svg>"""
 
-_SVG_SYM = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 110" font-family="system-ui,sans-serif">
+_SVG_DATA_SYM = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 110" font-family="system-ui,sans-serif">
   <rect width="300" height="110" fill="#f8fafd"/>
   <text x="72"  y="11" text-anchor="middle" font-size="8" font-style="italic" fill="#969696">symmetric</text>
   <text x="228" y="11" text-anchor="middle" font-size="8" font-style="italic" fill="#969696">one-sided</text>
@@ -184,8 +190,8 @@ _SVG_SYM = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 110" fon
 </svg>"""
 
 _DIAG_SVG = {
-    'link': _SVG_LINK, 'wheel': _SVG_WHEEL,
-    'h':    _SVG_H,    'dist':  _SVG_DIST,    'sym': _SVG_SYM,
+    'link': _SVG_DATA_LINK, 'wheel': _SVG_DATA_WHEEL,
+    'h':    _SVG_DATA_H,    'dist':  _SVG_DATA_DIST,    'sym': _SVG_DATA_SYM,
 }
 _DIAG_CACHE = {}
 
