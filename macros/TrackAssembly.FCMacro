@@ -303,10 +303,14 @@ class _SvgTip(QtWidgets.QFrame):
         self.hide()
 
     def show_svg(self, widget, pixmap, caption):
+        dpr = pixmap.devicePixelRatio() or 1.0
+        lw  = int(pixmap.width()  / dpr)
+        lh  = int(pixmap.height() / dpr)
         self._img.setPixmap(pixmap)
+        self._img.setFixedSize(lw, lh)
         if caption:
             self._cap.setText(caption)
-            self._cap.setMaximumWidth(pixmap.width())
+            self._cap.setMaximumWidth(lw)
             self._cap.show()
         else:
             self._cap.hide()
