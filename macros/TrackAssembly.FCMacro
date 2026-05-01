@@ -333,6 +333,26 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         wf.addRow("Hub bore ⌀:", self.spin_hub)
         wf.addRow("", self._hint("0 = solid wheel  ·  must be < D"))
 
+        self.spin_H = QtWidgets.QDoubleSpinBox()
+        self.spin_H.setRange(0.1, 9999.0); self.spin_H.setDecimals(3)
+        self.spin_H.setSuffix(" mm"); self.spin_H.setValue(8.0)
+        self.spin_H.setToolTip(
+            "Height of the chain link body (pin-to-pin thickness).\n\n"
+            "  Side profile of one link:\n"
+            "  ┌─────────────────────┐\n"
+            "  │    link body        │  ↕ H\n"
+            "  └─────────────────────┘\n"
+            "    ○              ○      ← pin holes\n\n"
+            "The inner face of the link sits H/2 below the pin centreline.\n"
+            "The polygon face is placed at radius  R − H/2  from the wheel\n"
+            "centre so the link body rests flush on each polygon face.\n\n"
+            "  polygon apothem  = R − H/2\n"
+            "  polygon circumR  = apothem / cos(π / n_sides)"
+        )
+        self.spin_H.valueChanged.connect(self._on_param_changed)
+        wf.addRow("Link body height H:", self.spin_H)
+        wf.addRow("", self._hint("thickness of one link body  ·  sets polygon face depth"))
+
         root.addWidget(wheel_grp)
 
         root.addWidget(self._hsep())
@@ -371,6 +391,7 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         self.lbl_n_straight = QtWidgets.QLabel("—")
         self.lbl_n_total    = QtWidgets.QLabel("—")
         self.lbl_radius     = QtWidgets.QLabel("—")
+        self.lbl_apothem    = QtWidgets.QLabel("—")
         self.lbl_straight   = QtWidgets.QLabel("—")
 
         cfl.addRow("Pitch:",                 self.lbl_pitch)
@@ -378,6 +399,7 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         cfl.addRow("N straight per side:",   self.lbl_n_straight)
         cfl.addRow("Total links:",           self.lbl_n_total)
         cfl.addRow("Arc radius:",            self.lbl_radius)
+        cfl.addRow("Polygon face depth:",    self.lbl_apothem)
         cfl.addRow("Actual wheel distance:", self.lbl_straight)
 
         root.addWidget(comp_grp)
@@ -528,32 +550,37 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         p = self._pitch()
         if p is None:
             for lbl in (self.lbl_pitch, self.lbl_n_arc, self.lbl_n_straight,
-                        self.lbl_n_total, self.lbl_radius, self.lbl_straight):
+                        self.lbl_n_total, self.lbl_radius, self.lbl_apothem,
+                        self.lbl_straight):
                 lbl.setText("—")
             return
 
-        D  = self.spin_D.value()
-        Ns = self._n_straight(p)
+        D     = self.spin_D.value()
+        h_seg = self.spin_H.value() / 2.0
+        Ns    = self._n_straight(p)
 
         self.lbl_pitch.setText("<b>{:.4f} mm</b>".format(p))
 
         n = self._n_per_arc(p, D)
         if n is None:
             msg = "<i style='color:red'>diameter too small for this pitch</i>"
-            for lbl in (self.lbl_n_arc, self.lbl_n_straight,
-                        self.lbl_n_total, self.lbl_radius, self.lbl_straight):
+            for lbl in (self.lbl_n_arc, self.lbl_n_straight, self.lbl_n_total,
+                        self.lbl_radius, self.lbl_apothem, self.lbl_straight):
                 lbl.setText(msg)
             return
 
-        N      = 2 * n + 2 * Ns
-        radius = p / (2.0 * math.sin(math.pi / (2.0 * n)))
-        s_len  = Ns * p
+        N       = 2 * n + 2 * Ns
+        radius  = p / (2.0 * math.sin(math.pi / (2.0 * n)))
+        apothem = radius - h_seg
+        s_len   = Ns * p
 
         self.lbl_n_arc.setText("<b>{}</b>  links per arc".format(n))
         self.lbl_n_straight.setText("<b>{}</b>  links per side".format(Ns))
         self.lbl_n_total.setText("<b>{}</b>  links".format(N))
         self.lbl_radius.setText(
             "<b>{:.3f} mm</b>  →  {}-gon wheel".format(radius, 2 * n))
+        self.lbl_apothem.setText(
+            "<b>{:.3f} mm</b>  (R − H/2 = face-to-centre)".format(apothem))
         self.lbl_straight.setText(
             "<b>{:.3f} mm</b>  ({} × pitch)".format(s_len, Ns))
 
@@ -576,17 +603,22 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
 
     # ── wheel solid ───────────────────────────────────────────────────────────
 
-    def _make_wheel(self, n, pitch, W, hub_bore, cx, cy, cz):
-        """Regular polygon prism: 2*n sides, circumradius R, each side = pitch.
+    def _make_wheel(self, n, pitch, W, hub_bore, h_seg, cx, cy, cz):
+        """Regular polygon prism: 2*n sides.
+        Pin centres sit at arc radius R.  Link inner face is h_seg (= H/2)
+        below the pin centreline, so the polygon apothem = R − h_seg and the
+        polygon circumradius = apothem / cos(π / n_sides).
         Vertex at -90° so the bottom face aligns with the first arc link."""
-        R      = pitch / (2.0 * math.sin(math.pi / (2.0 * n)))
-        Rb     = hub_bore / 2.0
+        R       = pitch / (2.0 * math.sin(math.pi / (2.0 * n)))
+        Rb      = hub_bore / 2.0
         n_sides = 2 * n
+        apothem = R - h_seg
+        R_poly  = apothem / math.cos(math.pi / n_sides)
 
         pts = []
         for i in range(n_sides):
             ang = math.radians(-90.0 + i * 360.0 / n_sides)
-            pts.append(FreeCAD.Vector(R * math.cos(ang), R * math.sin(ang), 0))
+            pts.append(FreeCAD.Vector(R_poly * math.cos(ang), R_poly * math.sin(ang), 0))
         pts.append(pts[0])
 
         wire  = Part.makePolygon(pts)
@@ -616,8 +648,9 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         p   = self._pitch()
         D   = self.spin_D.value()
         W   = self.spin_W.value()
-        hub = self.spin_hub.value()
-        Ns  = self._n_straight(p)
+        hub   = self.spin_hub.value()
+        h_seg = self.spin_H.value() / 2.0
+        Ns    = self._n_straight(p)
         Ddir = +1.0 if self.radio_up.isChecked() else -1.0
 
         n       = self._n_per_arc(p, D)
@@ -694,7 +727,7 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
             if not cb.isChecked():
                 continue
             try:
-                shape = self._make_wheel(n, p, W, hub, wx, 0.0, cz)
+                shape = self._make_wheel(n, p, W, hub, h_seg, wx, 0.0, cz)
             except Exception as e:
                 QtWidgets.QMessageBox.critical(self, "Wheel Error", str(e))
                 return
