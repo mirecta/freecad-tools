@@ -197,13 +197,11 @@ _DIAG_CACHE = {}
 
 
 def _render_svg(svg_bytes, lw, lh):
-    """Render SVG bytes into a 2× QPixmap of logical size lw×lh."""
-    pm = QtGui.QPixmap(lw * 2, lh * 2)
-    pm.setDevicePixelRatio(2.0)
+    pm = QtGui.QPixmap(lw, lh)
     pm.fill(QtGui.QColor(248, 250, 252))
     renderer = _QtSvg.QSvgRenderer(QtCore.QByteArray(svg_bytes))
     p = QtGui.QPainter(pm)
-    renderer.render(p, QtCore.QRectF(0, 0, lw * 2, lh * 2))
+    renderer.render(p, QtCore.QRectF(0, 0, lw, lh))
     p.end()
     return pm
 
@@ -211,12 +209,11 @@ def _render_svg(svg_bytes, lw, lh):
 # ── QPainter fallback diagrams (used when QtSvg is not available) ─────────────
 
 def _pm2(W, H):
-    pm = QtGui.QPixmap(W * 2, H * 2)
-    pm.setDevicePixelRatio(2.0)
+    pm = QtGui.QPixmap(W, H)
     pm.fill(QtGui.QColor(248, 250, 252))
     p = QtGui.QPainter(pm)
     p.setRenderHint(_Qt_Antialias)
-    return pm, p, lambda v: int(round(v * 2))
+    return pm, p, lambda v: v
 
 def _f(px, bold=False, italic=False):
     f = QtGui.QFont(); f.setPixelSize(px); f.setBold(bold); f.setItalic(italic); return f
@@ -422,14 +419,11 @@ class _SvgTip(QtWidgets.QFrame):
         self.hide()
 
     def show_svg(self, widget, pixmap, caption):
-        dpr = pixmap.devicePixelRatio() or 1.0
-        lw  = int(pixmap.width()  / dpr)
-        lh  = int(pixmap.height() / dpr)
         self._img.setPixmap(pixmap)
-        self._img.setFixedSize(lw, lh)
+        self._img.setFixedSize(pixmap.width(), pixmap.height())
         if caption:
             self._cap.setText(caption)
-            self._cap.setMaximumWidth(lw)
+            self._cap.setMaximumWidth(pixmap.width())
             self._cap.show()
         else:
             self._cap.hide()
