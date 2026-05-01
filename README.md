@@ -115,6 +115,68 @@ A `Part::Feature` named `TrackChain_<N>links_<up|down>` is added to the active d
 
 ---
 
+### Wheel — Track Wheel Generator
+
+Generates a smooth cylindrical wheel that a track chain wraps around.  
+The chain links ride on the wheel's rim edge — no teeth or pockets needed.
+
+#### Features
+
+| | |
+|---|---|
+| Dual pitch mode | Pick joint holes from a chain link OR type pitch manually |
+| Minimum diameter guard | Computes the smallest wheel that fits the link body geometry — Generate is disabled if the chosen diameter is too small |
+| Live computed panel | N per arc, minimum wheel ⌀, and minimum straight section update instantly |
+| Hub bore | Optional central axle hole |
+
+#### Parameters
+
+| Parameter | Default | Notes |
+|---|---|---|
+| Wheel diameter D | 80 mm | Outer diameter the chain rides on |
+| Width W | 20 mm | Should be ≥ chain inner width |
+| Hub bore ⌀ | 10 mm | Axle bore; set to 0 for a solid wheel |
+| Link body height H | 8 mm | Height of the chain link body — drives the minimum diameter check |
+
+#### Minimum wheel diameter
+
+If the wheel is too small, the rigid link bodies collide with the rim as they transition from the arc to the straight section. The safe minimum is:
+
+```
+R_min = P² / H  +  H / 4
+D_min = 2 × R_min
+```
+
+where `P` = pitch and `H` = link body height. The macro enforces this.
+
+#### Usage workflow
+
+```mermaid
+flowchart LR
+    A([Open document]) --> B([Run macro])
+    B --> C([Pick joints from link\nor enter pitch manually])
+    C --> D([Enter link body height H])
+    D --> E([Set diameter, width, hub bore])
+    E --> F{D ≥ D_min?}
+    F -- yes --> G([Generate Wheel])
+    F -- no  --> E
+    G --> H([Wheel object\nadded to document])
+```
+
+#### Using with TrackChain
+
+The **N per arc** value shown in the Computed panel is the exact number to enter in TrackChain's *"Links per straight side"* calculation:
+
+1. Run Wheel macro → note **N per arc**
+2. Run TrackChain → set **Total links** so that `(Total − 2 × N_straight) / 2 = N per arc`
+3. The chain arcs will match the wheel diameter exactly
+
+#### Output
+
+`Part::Feature` named `Wheel_D<D>mm_<pitch>mm_pitch` added to the active document.
+
+---
+
 ## License
 
 MIT

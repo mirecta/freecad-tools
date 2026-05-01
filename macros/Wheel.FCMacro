@@ -1,0 +1,475 @@
+# =============================================================================
+#  Wheel.FCMacro  v1
+#  –  Smooth track wheel generator for pin-type track chains
+# =============================================================================
+#
+#  WORKFLOW
+#  --------
+#  1. Open the document where you want the wheel.
+#  2. Run the macro.  The dialog is non-modal — 3-D view stays clickable.
+#  3a. PICK MODE:   Click the left hole edge on a chain link (turns orange),
+#                   click [Pick Joint 1].  Repeat for the right hole edge.
+#  3b. MANUAL MODE: Switch to "Enter manually", type the pitch value.
+#  4. Enter the link body height H (for minimum-diameter validation).
+#  5. Set wheel dimensions (diameter, width, hub bore).
+#  6. Watch the "Computed" panel — it shows N_per_arc and minimum safe diameter.
+#  7. Click [Generate Wheel].
+#
+#  MINIMUM WHEEL DIAMETER
+#  ----------------------
+#  A wheel that is too small causes rigid link bodies to collide with the rim
+#  as they transition from arc to straight.  The formula is:
+#
+#    R_min = P² / H + H / 4
+#
+#  where P = pitch and H = link body height.  The macro enforces this.
+#
+# =============================================================================
+
+import FreeCAD
+import FreeCADGui
+import Part
+import math
+
+try:
+    from PySide2 import QtWidgets, QtCore, QtGui
+except ImportError:
+    from PySide  import QtGui as QtWidgets, QtCore
+
+
+# ── dialog ────────────────────────────────────────────────────────────────────
+
+class WheelDialog(QtWidgets.QDialog):
+
+    def __init__(self):
+        super().__init__(FreeCADGui.getMainWindow())
+        self.joint_1 = None
+        self.joint_2 = None
+        self.setWindowTitle("Wheel Builder  v1")
+        self.setWindowFlags(
+            QtCore.Qt.Window |
+            QtCore.Qt.WindowStaysOnTopHint
+        )
+        self._build_ui()
+        self._update_computed()
+        self._validate()
+
+    # ── UI ────────────────────────────────────────────────────────────────────
+
+    def _build_ui(self):
+        root = QtWidgets.QVBoxLayout(self)
+        root.setSpacing(8)
+
+        root.addWidget(self._banner(
+            "<b>How to pick a joint:</b><br>"
+            "① Click a circular hole <b>edge</b> in the 3-D view  (turns orange)<br>"
+            "② Click the matching <b>Pick</b> button below<br>"
+            "Or switch to <b>Enter manually</b> and type the pitch."
+        ))
+
+        # ── pitch source ──────────────────────────────────────────────────────
+        pitch_grp = QtWidgets.QGroupBox("Chain pitch")
+        pitch_lay = QtWidgets.QVBoxLayout(pitch_grp)
+
+        mode_row = QtWidgets.QHBoxLayout()
+        self.radio_pick   = QtWidgets.QRadioButton("Pick from chain link")
+        self.radio_manual = QtWidgets.QRadioButton("Enter manually")
+        self.radio_pick.setChecked(True)
+        mode_row.addWidget(self.radio_pick)
+        mode_row.addWidget(self.radio_manual)
+        mode_row.addStretch()
+        pitch_lay.addLayout(mode_row)
+
+        # pick sub-panel
+        self.pick_panel = QtWidgets.QWidget()
+        pg = QtWidgets.QGridLayout(self.pick_panel)
+        pg.setContentsMargins(0, 4, 0, 0)
+        pg.setColumnStretch(1, 1)
+
+        self.icon_1   = QtWidgets.QLabel("○"); self.icon_1.setFixedWidth(20)
+        self.coord_1  = QtWidgets.QLabel("<i>not picked</i>")
+        self.btn_j1   = QtWidgets.QPushButton("Pick Joint 1")
+        self.btn_j1.setToolTip(
+            "① Click the LEFT hole edge in the 3-D view\n② Click this button")
+        self.btn_j1.clicked.connect(self._on_pick_j1)
+
+        self.icon_2   = QtWidgets.QLabel("○"); self.icon_2.setFixedWidth(20)
+        self.coord_2  = QtWidgets.QLabel("<i>not picked</i>")
+        self.btn_j2   = QtWidgets.QPushButton("Pick Joint 2")
+        self.btn_j2.setToolTip(
+            "① Click the RIGHT hole edge in the 3-D view\n② Click this button")
+        self.btn_j2.clicked.connect(self._on_pick_j2)
+
+        pg.addWidget(self.icon_1,  0, 0)
+        pg.addWidget(self.coord_1, 0, 1)
+        pg.addWidget(self.btn_j1,  0, 2)
+        pg.addWidget(self.icon_2,  1, 0)
+        pg.addWidget(self.coord_2, 1, 1)
+        pg.addWidget(self.btn_j2,  1, 2)
+        pitch_lay.addWidget(self.pick_panel)
+
+        # manual sub-panel
+        self.manual_panel = QtWidgets.QWidget()
+        ml = QtWidgets.QHBoxLayout(self.manual_panel)
+        ml.setContentsMargins(0, 4, 0, 0)
+        ml.addWidget(QtWidgets.QLabel("Pitch:"))
+        self.spin_pitch = QtWidgets.QDoubleSpinBox()
+        self.spin_pitch.setRange(0.1, 9999.0)
+        self.spin_pitch.setDecimals(4)
+        self.spin_pitch.setSuffix(" mm")
+        self.spin_pitch.setValue(12.5)
+        self.spin_pitch.valueChanged.connect(self._refresh_pitch)
+        ml.addWidget(self.spin_pitch)
+        ml.addStretch()
+        self.manual_panel.setVisible(False)
+        pitch_lay.addWidget(self.manual_panel)
+
+        self.pitch_label = QtWidgets.QLabel("Pitch: —")
+        self.pitch_label.setStyleSheet("color:#555; padding-left:4px;")
+        pitch_lay.addWidget(self.pitch_label)
+
+        self.radio_pick.toggled.connect(self._on_pitch_mode_changed)
+        root.addWidget(pitch_grp)
+
+        root.addWidget(self._hsep())
+
+        # ── link body ─────────────────────────────────────────────────────────
+        body_grp = QtWidgets.QGroupBox("Link body")
+        bf = QtWidgets.QFormLayout(body_grp)
+
+        self.spin_H = QtWidgets.QDoubleSpinBox()
+        self.spin_H.setRange(0.1, 9999.0)
+        self.spin_H.setDecimals(3)
+        self.spin_H.setSuffix(" mm")
+        self.spin_H.setValue(8.0)
+        self.spin_H.valueChanged.connect(self._on_param_changed)
+        bf.addRow("Link body height H:", self.spin_H)
+
+        hint_h = QtWidgets.QLabel("height of the link body (drives minimum wheel diameter)")
+        hint_h.setStyleSheet("color:gray; font-size:10px;")
+        bf.addRow("", hint_h)
+
+        root.addWidget(body_grp)
+
+        root.addWidget(self._hsep())
+
+        # ── wheel dimensions ──────────────────────────────────────────────────
+        wheel_grp = QtWidgets.QGroupBox("Wheel dimensions")
+        wf = QtWidgets.QFormLayout(wheel_grp)
+
+        self.spin_D = QtWidgets.QDoubleSpinBox()
+        self.spin_D.setRange(1.0, 99999.0)
+        self.spin_D.setDecimals(3)
+        self.spin_D.setSuffix(" mm")
+        self.spin_D.setValue(80.0)
+        self.spin_D.valueChanged.connect(self._on_param_changed)
+        wf.addRow("Wheel diameter D:", self.spin_D)
+
+        self.spin_W = QtWidgets.QDoubleSpinBox()
+        self.spin_W.setRange(0.1, 9999.0)
+        self.spin_W.setDecimals(3)
+        self.spin_W.setSuffix(" mm")
+        self.spin_W.setValue(20.0)
+        self.spin_W.valueChanged.connect(self._on_param_changed)
+        wf.addRow("Width W:", self.spin_W)
+
+        self.spin_hub = QtWidgets.QDoubleSpinBox()
+        self.spin_hub.setRange(0.0, 9999.0)
+        self.spin_hub.setDecimals(3)
+        self.spin_hub.setSuffix(" mm")
+        self.spin_hub.setValue(10.0)
+        self.spin_hub.valueChanged.connect(self._on_param_changed)
+        wf.addRow("Hub bore ⌀:", self.spin_hub)
+
+        hint_hub = QtWidgets.QLabel("0 = solid wheel (no bore)")
+        hint_hub.setStyleSheet("color:gray; font-size:10px;")
+        wf.addRow("", hint_hub)
+
+        root.addWidget(wheel_grp)
+
+        root.addWidget(self._hsep())
+
+        # ── computed ──────────────────────────────────────────────────────────
+        comp_grp = QtWidgets.QGroupBox("Computed")
+        comp_grp.setStyleSheet(
+            "QGroupBox { background:#f0f4f8; border-radius:4px; }"
+        )
+        cf = QtWidgets.QFormLayout(comp_grp)
+
+        self.lbl_min_d   = QtWidgets.QLabel("—")
+        self.lbl_n_arc   = QtWidgets.QLabel("—")
+        self.lbl_min_str = QtWidgets.QLabel("—")
+
+        cf.addRow("Minimum wheel ⌀:", self.lbl_min_d)
+        cf.addRow("N per arc:", self.lbl_n_arc)
+        cf.addRow("Min straight / side:", self.lbl_min_str)
+
+        root.addWidget(comp_grp)
+
+        # ── action buttons ────────────────────────────────────────────────────
+        btn_row = QtWidgets.QHBoxLayout()
+        self.gen_btn = QtWidgets.QPushButton("Generate Wheel")
+        self.gen_btn.setDefault(True)
+        self.gen_btn.setEnabled(False)
+        self.gen_btn.clicked.connect(self._on_generate)
+        cancel_btn = QtWidgets.QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addStretch()
+        btn_row.addWidget(cancel_btn)
+        btn_row.addWidget(self.gen_btn)
+        root.addLayout(btn_row)
+
+        self.setMinimumWidth(460)
+
+    # ── helpers ───────────────────────────────────────────────────────────────
+
+    def _banner(self, html):
+        lbl = QtWidgets.QLabel(html)
+        lbl.setStyleSheet(
+            "background:#fffbe6; border:1px solid #f0c040;"
+            "border-radius:4px; padding:6px;")
+        lbl.setWordWrap(True)
+        return lbl
+
+    def _hsep(self):
+        sep = QtWidgets.QFrame()
+        sep.setFrameShape(QtWidgets.QFrame.HLine)
+        sep.setFrameShadow(QtWidgets.QFrame.Sunken)
+        return sep
+
+    def _fmt(self, v):
+        return "({:.2f},  {:.2f},  {:.2f})".format(v.x, v.y, v.z)
+
+    # ── pitch pick logic ──────────────────────────────────────────────────────
+
+    def _read_circle(self):
+        for item in FreeCADGui.Selection.getSelectionEx():
+            for sub in item.SubObjects:
+                if hasattr(sub, "Curve") and hasattr(sub.Curve, "Center"):
+                    c = sub.Curve.Center
+                    return FreeCAD.Vector(c.x, c.y, c.z)
+        return None
+
+    def _on_pick_j1(self):
+        c = self._read_circle()
+        if c is None:
+            self._warn_no_circle()
+            return
+        self.joint_1 = c
+        self.icon_1.setText("✅")
+        self.coord_1.setText(self._fmt(c))
+        self._refresh_pitch()
+
+    def _on_pick_j2(self):
+        c = self._read_circle()
+        if c is None:
+            self._warn_no_circle()
+            return
+        self.joint_2 = c
+        self.icon_2.setText("✅")
+        self.coord_2.setText(self._fmt(c))
+        self._refresh_pitch()
+
+    def _warn_no_circle(self):
+        QtWidgets.QMessageBox.warning(
+            self, "No circular edge selected",
+            "No circular edge found in the current selection.\n\n"
+            "• Click directly on the rim of the hole (not the flat face)\n"
+            "• The edge turns orange when selected\n"
+            "• Then click the Pick button"
+        )
+
+    def _current_pitch(self):
+        if self.radio_pick.isChecked():
+            if self.joint_1 and self.joint_2:
+                j1, j2 = self.joint_1, self.joint_2
+                return math.sqrt(
+                    (j2.x-j1.x)**2 + (j2.y-j1.y)**2 + (j2.z-j1.z)**2
+                )
+            return None
+        return self.spin_pitch.value()
+
+    def _refresh_pitch(self):
+        p = self._current_pitch()
+        if p is not None:
+            self.pitch_label.setText(
+                "Pitch: <b>{:.4f} mm</b>".format(p)
+            )
+        else:
+            self.pitch_label.setText("Pitch: —")
+        self._update_computed()
+        self._validate()
+
+    def _on_pitch_mode_changed(self, pick_checked):
+        self.pick_panel.setVisible(pick_checked)
+        self.manual_panel.setVisible(not pick_checked)
+        if not pick_checked:
+            self.joint_1 = None
+            self.joint_2 = None
+            self.icon_1.setText("○"); self.coord_1.setText("<i>not picked</i>")
+            self.icon_2.setText("○"); self.coord_2.setText("<i>not picked</i>")
+        self._refresh_pitch()
+
+    def _on_param_changed(self, _=None):
+        self._update_computed()
+        self._validate()
+
+    # ── computed labels ───────────────────────────────────────────────────────
+
+    def _r_min(self, pitch, H):
+        return pitch**2 / H + H / 4.0
+
+    def _n_per_arc(self, pitch, D):
+        arg = pitch / D
+        if arg >= 1.0:
+            return None
+        return max(2, round(math.pi / (2.0 * math.asin(arg))))
+
+    def _update_computed(self):
+        p = self._current_pitch()
+        H = self.spin_H.value()
+        D = self.spin_D.value()
+
+        if p is None or H <= 0:
+            self.lbl_min_d.setText("—")
+            self.lbl_n_arc.setText("—")
+            self.lbl_min_str.setText("—")
+            return
+
+        r_min = self._r_min(p, H)
+        d_min = 2.0 * r_min
+        self.lbl_min_d.setText(
+            "<b>{:.2f} mm</b>".format(d_min) +
+            (" ✅" if D >= d_min else " <b style='color:red'>⚠ too small</b>")
+        )
+
+        n = self._n_per_arc(p, D)
+        if n is None:
+            self.lbl_n_arc.setText("<i>diameter too small for pitch</i>")
+            self.lbl_min_str.setText("—")
+        else:
+            self.lbl_n_arc.setText("<b>{}</b>  links per arc".format(n))
+            self.lbl_min_str.setText(
+                "<b>{:.2f} mm</b>  (= 1 × pitch, recommended)".format(p)
+            )
+
+    # ── validation ────────────────────────────────────────────────────────────
+
+    def _validate(self):
+        p = self._current_pitch()
+        H = self.spin_H.value()
+        D = self.spin_D.value()
+        hub = self.spin_hub.value()
+
+        ok = True
+        if p is None:
+            ok = False
+        else:
+            if D <= 0:
+                ok = False
+            elif self._n_per_arc(p, D) is None:
+                ok = False
+            elif D < 2.0 * self._r_min(p, H):
+                ok = False
+            elif hub >= D:
+                ok = False
+
+        self.gen_btn.setEnabled(ok)
+        return ok
+
+    # ── geometry ──────────────────────────────────────────────────────────────
+
+    def _compute_geometry(self, D, W, hub_bore):
+        R      = D / 2.0
+        R_bore = hub_bore / 2.0
+
+        disc = Part.makeCylinder(R, W)
+
+        if R_bore > 0.001:
+            bore = Part.makeCylinder(
+                R_bore, W + 2,
+                FreeCAD.Vector(0, 0, -1),
+                FreeCAD.Vector(0, 0, 1)
+            )
+            wheel = disc.cut(bore)
+        else:
+            wheel = disc
+
+        return wheel
+
+    # ── generate ──────────────────────────────────────────────────────────────
+
+    def _on_generate(self):
+        if not self._validate():
+            return
+
+        p    = self._current_pitch()
+        H    = self.spin_H.value()
+        D    = self.spin_D.value()
+        W    = self.spin_W.value()
+        hub  = self.spin_hub.value()
+
+        try:
+            shape = self._compute_geometry(D, W, hub)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Geometry Error", str(e))
+            return
+
+        n     = self._n_per_arc(p, D)
+        r_min = self._r_min(p, H)
+        label = "Wheel_D{:.0f}mm_{:.1f}mm_pitch".format(D, p)
+
+        doc        = FreeCAD.ActiveDocument
+        feat       = doc.addObject("Part::Feature", label)
+        feat.Shape = shape
+        feat.Label = label
+        doc.recompute()
+
+        try:
+            FreeCADGui.ActiveDocument.activeView().viewTop()
+            FreeCADGui.SendMsgToActiveView("ViewFit")
+        except Exception:
+            pass
+
+        self.accept()
+
+        QtWidgets.QMessageBox.information(
+            None, "Wheel  –  Done",
+            "Wheel created!\n\n"
+            "  Diameter          : {:.3f} mm\n"
+            "  Width             : {:.3f} mm\n"
+            "  Hub bore ⌀        : {:.3f} mm\n"
+            "  Pitch             : {:.4f} mm\n"
+            "  N per arc         : {}\n"
+            "  Min wheel ⌀       : {:.2f} mm\n"
+            "  Min straight/side : {:.2f} mm  (= 1 × pitch)\n\n"
+            "Object: \"{}\"".format(
+                D, W, hub, p, n, 2.0 * r_min, p, label
+            )
+        )
+
+
+# ── entry point ───────────────────────────────────────────────────────────────
+
+def run():
+    try:
+        from PySide2 import QtWidgets, QtCore
+    except ImportError:
+        from PySide import QtGui as QtWidgets, QtCore
+
+    if not FreeCAD.ActiveDocument:
+        QtWidgets.QMessageBox.warning(
+            None, "Wheel",
+            "No active document.\nCreate or open a FreeCAD document first."
+        )
+        return
+
+    dlg = WheelDialog()
+    dlg.show()
+
+    loop = QtCore.QEventLoop()
+    dlg.finished.connect(loop.quit)
+    loop.exec_()
+
+
+run()
