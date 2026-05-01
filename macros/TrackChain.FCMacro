@@ -1,0 +1,490 @@
+# =============================================================================
+#  TrackChain.FCMacro  v4
+#  –  Interactive joint picker, loop direction selector, chain generator
+# =============================================================================
+#
+#  WORKFLOW
+#  --------
+#  1. Select your track-link body in the 3-D view, then run the macro.
+#  2. A dialog opens.  The 3-D view stays fully interactive while it is open.
+#  3. Click the LEFT  hole edge in the 3-D view  (turns orange).
+#     Click  [Pick Left Joint]  in the dialog.
+#  4. Click the RIGHT hole edge in the 3-D view  (turns orange).
+#     Click  [Pick Right Joint]  in the dialog.
+#  5. Choose loop direction:  ↑ Up  or  ↓ Down.
+#  6. Set total links and straight-section count.
+#  7. Click  [Generate Chain].
+#
+#  LOOP DIRECTION
+#  --------------
+#  "Up"   – chain wraps counter-clockwise (curves go above the straight runs)
+#  "Down" – chain wraps clockwise         (curves go below the straight runs)
+#  Switch direction if the chain comes out on the wrong side of your design.
+#
+# =============================================================================
+
+import FreeCAD
+import FreeCADGui
+import Part
+import math
+
+try:
+    from PySide2 import QtWidgets, QtCore, QtGui
+except ImportError:
+    from PySide  import QtGui as QtWidgets, QtCore
+
+
+# ── dialog ────────────────────────────────────────────────────────────────────
+
+class TrackChainDialog(QtWidgets.QDialog):
+
+    def __init__(self, base_obj):
+        super().__init__(FreeCADGui.getMainWindow())
+        self.base_obj    = base_obj
+        self.left_joint  = None
+        self.right_joint = None
+        self.setWindowTitle("Track Chain Builder  v4")
+        self.setWindowFlags(
+            QtCore.Qt.Window |
+            QtCore.Qt.WindowStaysOnTopHint
+        )
+        self._build_ui()
+
+    # ── UI ────────────────────────────────────────────────────────────────────
+
+    def _build_ui(self):
+        root = QtWidgets.QVBoxLayout(self)
+        root.setSpacing(8)
+
+        # object label
+        obj_grp = QtWidgets.QGroupBox("Track link element")
+        ol = QtWidgets.QHBoxLayout(obj_grp)
+        ol.addWidget(QtWidgets.QLabel(
+            "<b>{}</b>".format(self.base_obj.Label if self.base_obj else "none")
+        ))
+        root.addWidget(obj_grp)
+
+        # instruction banner
+        root.addWidget(self._banner(
+            "<b>How to pick a joint:</b><br>"
+            "① Click a circular hole <b>edge</b> in the 3-D view  (turns orange)<br>"
+            "② Click the matching <b>Pick</b> button below"
+        ))
+
+        # ── joint pickers ─────────────────────────────────────────────────────
+        joints_grp = QtWidgets.QGroupBox("Joint connection points")
+        jg = QtWidgets.QGridLayout(joints_grp)
+        jg.setColumnStretch(1, 1)
+
+        self.left_icon   = QtWidgets.QLabel("○")
+        self.left_icon.setFixedWidth(20)
+        self.left_coords = QtWidgets.QLabel("<i>not picked</i>")
+        self.btn_left    = QtWidgets.QPushButton("⬅  Pick Left Joint")
+        self.btn_left.setToolTip(
+            "① Click the LEFT hole edge in the 3-D view\n"
+            "② Click this button")
+        self.btn_left.clicked.connect(self._on_pick_left)
+
+        self.right_icon   = QtWidgets.QLabel("○")
+        self.right_icon.setFixedWidth(20)
+        self.right_coords = QtWidgets.QLabel("<i>not picked</i>")
+        self.btn_right    = QtWidgets.QPushButton("Pick Right Joint  ➡")
+        self.btn_right.setToolTip(
+            "① Click the RIGHT hole edge in the 3-D view\n"
+            "② Click this button")
+        self.btn_right.clicked.connect(self._on_pick_right)
+
+        jg.addWidget(self.left_icon,   0, 0)
+        jg.addWidget(self.left_coords, 0, 1)
+        jg.addWidget(self.btn_left,    0, 2)
+        jg.addWidget(self.right_icon,  1, 0)
+        jg.addWidget(self.right_coords,1, 1)
+        jg.addWidget(self.btn_right,   1, 2)
+        root.addWidget(joints_grp)
+
+        self.pitch_label = QtWidgets.QLabel("Pitch: —")
+        self.pitch_label.setStyleSheet("color:#555; padding-left:4px;")
+        root.addWidget(self.pitch_label)
+
+        # separator
+        root.addWidget(self._hsep())
+
+        # ── loop direction ────────────────────────────────────────────────────
+        dir_grp = QtWidgets.QGroupBox("Loop direction")
+        dir_lay = QtWidgets.QHBoxLayout(dir_grp)
+
+        self.radio_up   = QtWidgets.QRadioButton("↑  Up   (counter-clockwise)")
+        self.radio_down = QtWidgets.QRadioButton("↓  Down  (clockwise)")
+        self.radio_up.setChecked(True)
+
+        self.radio_up.setToolTip(
+            "Curves extend ABOVE the straight sections.\n"
+            "Chain runs counter-clockwise when viewed from the front.")
+        self.radio_down.setToolTip(
+            "Curves extend BELOW the straight sections.\n"
+            "Chain runs clockwise when viewed from the front.")
+
+        dir_lay.addWidget(self.radio_up)
+        dir_lay.addWidget(self.radio_down)
+
+        # small diagram that updates when toggled
+        self.dir_diagram = QtWidgets.QLabel()
+        self.dir_diagram.setAlignment(QtCore.Qt.AlignCenter)
+        self.dir_diagram.setStyleSheet(
+            "font-family: monospace; font-size:11px; color:#333;"
+            "background:#f5f5f5; border:1px solid #ccc; border-radius:4px; padding:4px;"
+        )
+        self._update_dir_diagram()
+        self.radio_up.toggled.connect(self._update_dir_diagram)
+
+        dir_lay.addWidget(self.dir_diagram)
+        root.addWidget(dir_grp)
+
+        # separator
+        root.addWidget(self._hsep())
+
+        # ── chain parameters ──────────────────────────────────────────────────
+        params_grp = QtWidgets.QGroupBox("Chain parameters")
+        form = QtWidgets.QFormLayout(params_grp)
+
+        self.spin_n = QtWidgets.QSpinBox()
+        self.spin_n.setRange(4, 9998)
+        self.spin_n.setSingleStep(2)
+        self.spin_n.setValue(40)
+        self.spin_n.valueChanged.connect(self._update_max_straight)
+        form.addRow("Total links  (even):", self.spin_n)
+
+        self.spin_s = QtWidgets.QSpinBox()
+        self.spin_s.setRange(0, 18)
+        self.spin_s.setValue(8)
+        self.spin_s.valueChanged.connect(
+            lambda _: self._on_wheel_diam_changed(self.spin_wheel.value()))
+        form.addRow("Links per straight side:", self.spin_s)
+
+        hint = QtWidgets.QLabel("0 = pure circle  ·  higher = longer oval")
+        hint.setStyleSheet("color:gray; font-size:10px;")
+        form.addRow("", hint)
+
+        # ── wheel diameter helper ─────────────────────────────────────────────
+        self.check_wheel = QtWidgets.QCheckBox("Use wheel diameter")
+        self.spin_wheel  = QtWidgets.QDoubleSpinBox()
+        self.spin_wheel.setRange(1.0, 99999.0)
+        self.spin_wheel.setDecimals(2)
+        self.spin_wheel.setSuffix(" mm")
+        self.spin_wheel.setValue(100.0)
+        self.spin_wheel.setEnabled(False)
+        self.check_wheel.toggled.connect(self._on_wheel_mode_changed)
+        self.spin_wheel.valueChanged.connect(self._on_wheel_diam_changed)
+        form.addRow(self.check_wheel, self.spin_wheel)
+
+        self.wheel_info = QtWidgets.QLabel("—")
+        self.wheel_info.setStyleSheet("color:#555; font-size:10px; padding-left:4px;")
+        form.addRow("", self.wheel_info)
+
+        root.addWidget(params_grp)
+
+        # ── action buttons ────────────────────────────────────────────────────
+        btn_row = QtWidgets.QHBoxLayout()
+        self.gen_btn = QtWidgets.QPushButton("Generate Chain")
+        self.gen_btn.setDefault(True)
+        self.gen_btn.setEnabled(False)
+        self.gen_btn.clicked.connect(self._on_generate)
+        cancel_btn = QtWidgets.QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addStretch()
+        btn_row.addWidget(cancel_btn)
+        btn_row.addWidget(self.gen_btn)
+        root.addLayout(btn_row)
+
+        self.setMinimumWidth(480)
+
+    # ── helpers ───────────────────────────────────────────────────────────────
+
+    def _banner(self, html):
+        lbl = QtWidgets.QLabel(html)
+        lbl.setStyleSheet(
+            "background:#fffbe6; border:1px solid #f0c040;"
+            "border-radius:4px; padding:6px;")
+        lbl.setWordWrap(True)
+        return lbl
+
+    def _hsep(self):
+        sep = QtWidgets.QFrame()
+        sep.setFrameShape(QtWidgets.QFrame.HLine)
+        sep.setFrameShadow(QtWidgets.QFrame.Sunken)
+        return sep
+
+    def _update_dir_diagram(self):
+        if self.radio_up.isChecked():
+            diagram = (
+                "  ╭──────────────╮\n"
+                "  │  ↑  UP loop  │\n"
+                "  ╰──────────────╯\n"
+                "  ══════════════  "
+            )
+        else:
+            diagram = (
+                "  ══════════════  \n"
+                "  ╭─────────────╮\n"
+                "  │ ↓ DOWN loop │\n"
+                "  ╰─────────────╯"
+            )
+        self.dir_diagram.setText(diagram)
+
+    def _update_max_straight(self, n):
+        max_s = max(0, n // 2 - 2)
+        self.spin_s.setMaximum(max_s)
+
+    # ── pick logic ────────────────────────────────────────────────────────────
+
+    def _read_circle(self):
+        for item in FreeCADGui.Selection.getSelectionEx():
+            for sub in item.SubObjects:
+                if hasattr(sub, "Curve") and hasattr(sub.Curve, "Center"):
+                    c = sub.Curve.Center
+                    return FreeCAD.Vector(c.x, c.y, c.z)
+        return None
+
+    def _fmt(self, v):
+        return "({:.2f},  {:.2f},  {:.2f})".format(v.x, v.y, v.z)
+
+    def _on_pick_left(self):
+        c = self._read_circle()
+        if c is None:
+            self._warn_no_circle()
+            return
+        self.left_joint = c
+        self.left_icon.setText("✅")
+        self.left_coords.setText(self._fmt(c))
+        self._refresh_pitch()
+
+    def _on_pick_right(self):
+        c = self._read_circle()
+        if c is None:
+            self._warn_no_circle()
+            return
+        self.right_joint = c
+        self.right_icon.setText("✅")
+        self.right_coords.setText(self._fmt(c))
+        self._refresh_pitch()
+
+    def _warn_no_circle(self):
+        QtWidgets.QMessageBox.warning(
+            self, "No circular edge selected",
+            "No circular edge found in the current selection.\n\n"
+            "• Click directly on the rim of the hole (not the flat face)\n"
+            "• The edge turns orange when selected\n"
+            "• Then click the Pick button"
+        )
+
+    def _pitch(self):
+        j1, j2 = self.left_joint, self.right_joint
+        return math.sqrt(
+            (j2.x-j1.x)**2 + (j2.y-j1.y)**2 + (j2.z-j1.z)**2
+        )
+
+    def _refresh_pitch(self):
+        if self.left_joint and self.right_joint:
+            p = self._pitch()
+            self.pitch_label.setText(
+                "Pitch (joint-to-joint distance): <b>{:.3f} mm</b>".format(p)
+            )
+            self.gen_btn.setEnabled(True)
+            if self.check_wheel.isChecked():
+                self._on_wheel_diam_changed(self.spin_wheel.value())
+        else:
+            self.pitch_label.setText("Pitch: —")
+            self.gen_btn.setEnabled(False)
+
+    def _on_wheel_mode_changed(self, checked):
+        self.spin_wheel.setEnabled(checked)
+        self.spin_n.setEnabled(not checked)
+        if checked and self.left_joint and self.right_joint:
+            self._on_wheel_diam_changed(self.spin_wheel.value())
+        elif not checked:
+            self.wheel_info.setText("—")
+
+    def _on_wheel_diam_changed(self, d):
+        if not self.check_wheel.isChecked():
+            return
+        if not (self.left_joint and self.right_joint):
+            self.wheel_info.setText("pick joints first")
+            return
+        pitch = self._pitch()
+        arg = pitch / d
+        if arg >= 1.0:
+            self.wheel_info.setText("diameter too small for this pitch")
+            return
+        n_per   = max(2, round(math.pi / (2.0 * math.asin(arg))))
+        n_total = 2 * n_per + 2 * self.spin_s.value()
+        if n_total % 2 != 0:
+            n_total += 1
+        self.spin_n.setValue(n_total)
+        actual_d = pitch / math.sin(math.pi / (2.0 * n_per))
+        self.wheel_info.setText(
+            "N_per_curve = {}  ·  actual ⌀ {:.2f} mm".format(n_per, actual_d)
+        )
+
+    # ── generate ──────────────────────────────────────────────────────────────
+
+    def _on_generate(self):
+        j1 = self.left_joint
+        j2 = self.right_joint
+
+        # direction multiplier: +1 = up (CCW),  -1 = down (CW)
+        D = +1.0 if self.radio_up.isChecked() else -1.0
+
+        N          = self.spin_n.value()
+        N_straight = self.spin_s.value()
+
+        if N % 2 != 0:
+            N -= 1
+
+        N_curve = N - 2 * N_straight
+        if N_curve % 2 != 0:
+            N_straight -= 1
+            N_curve    += 2
+
+        N_per_curve = N_curve // 2
+
+        if N_per_curve < 1:
+            QtWidgets.QMessageBox.warning(
+                self, "Track Chain",
+                "Not enough links for the curved sections.\n"
+                "Increase total links or decrease straight-side count."
+            )
+            return
+
+        # ── geometry ──────────────────────────────────────────────────────────
+        pitch  = self._pitch()
+        cx     = (j1.x+j2.x) / 2.0
+        cy     = (j1.y+j2.y) / 2.0
+        e_ang  = math.degrees(math.atan2(j2.y-j1.y, j2.x-j1.x))
+
+        # chord-based radius: pin-to-pin chord == pitch → joints align exactly
+        radius  = pitch / (2.0 * math.sin(math.pi / (2.0 * N_per_curve)))
+        s_len   = N_straight  * pitch
+        half_sl = s_len / 2.0
+
+        base_shape = self.base_obj.Shape
+
+        FreeCAD.Console.PrintMessage(
+            "\n[TrackChain v4]  N={}  straight x2={}  arc x2={}  dir={}\n"
+            "  pitch={:.2f}  radius={:.2f}  straight={:.2f}  e_ang={:.1f} deg\n".format(
+                N, N_straight, N_per_curve,
+                "UP" if D > 0 else "DOWN",
+                pitch, radius, s_len, e_ang)
+        )
+
+        # ── placement matrix ──────────────────────────────────────────────────
+        #
+        #  D multiplies every Y coordinate:
+        #    D = +1  →  curves go upward   (standard CCW slot)
+        #    D = -1  →  curves go downward (mirrored CW slot)
+        #
+        def _mat(tx, ty_raw, chain_deg_raw):
+            ty        = D * ty_raw
+            chain_deg = D * chain_deg_raw
+            a  = math.radians(chain_deg - e_ang)
+            ca, sa = math.cos(a), math.sin(a)
+            m = FreeCAD.Matrix()
+            m.A11=ca;  m.A12=-sa; m.A13=0; m.A14=tx - ca*cx + sa*cy
+            m.A21=sa;  m.A22= ca; m.A23=0; m.A24=ty - sa*cx - ca*cy
+            m.A31= 0;  m.A32= 0;  m.A33=1; m.A34=0
+            m.A41= 0;  m.A42= 0;  m.A43=0; m.A44=1
+            return m
+
+        shapes = []
+        aS = 180.0 / N_per_curve
+
+        def _add(tx, ty, deg):
+            shapes.append(base_shape.transformGeometry(_mat(tx, ty, deg)))
+
+        # bottom straight  →  0°
+        for i in range(N_straight):
+            _add(-half_sl + pitch/2 + i*pitch, -radius, 0.0)
+
+        # right arc  (bottom → top,  −90° → +90°)
+        # Place each link between consecutive pin positions so joints coincide.
+        for i in range(N_per_curve):
+            phi0 = math.radians(-90.0 +  i      * aS)
+            phi1 = math.radians(-90.0 + (i + 1) * aS)
+            px0 = half_sl + radius * math.cos(phi0);  py0 = radius * math.sin(phi0)
+            px1 = half_sl + radius * math.cos(phi1);  py1 = radius * math.sin(phi1)
+            _add((px0 + px1) / 2.0, (py0 + py1) / 2.0,
+                 math.degrees(math.atan2(py1 - py0, px1 - px0)))
+
+        # top straight  ←  180°
+        for i in range(N_straight):
+            _add(half_sl - pitch/2 - i*pitch, radius, 180.0)
+
+        # left arc  (top → bottom,  +90° → +270°)
+        for i in range(N_per_curve):
+            phi0 = math.radians(90.0 +  i      * aS)
+            phi1 = math.radians(90.0 + (i + 1) * aS)
+            px0 = -half_sl + radius * math.cos(phi0);  py0 = radius * math.sin(phi0)
+            px1 = -half_sl + radius * math.cos(phi1);  py1 = radius * math.sin(phi1)
+            _add((px0 + px1) / 2.0, (py0 + py1) / 2.0,
+                 math.degrees(math.atan2(py1 - py0, px1 - px0)))
+
+        # ── document object ───────────────────────────────────────────────────
+        compound   = Part.makeCompound(shapes)
+        doc        = FreeCAD.ActiveDocument
+        feat       = doc.addObject("Part::Feature", "TrackChain")
+        feat.Shape = compound
+        feat.Label = "TrackChain_{}links_{}".format(
+            N, "up" if D > 0 else "down"
+        )
+        doc.recompute()
+
+        try:
+            FreeCADGui.ActiveDocument.activeView().viewTop()
+            FreeCADGui.SendMsgToActiveView("ViewFit")
+        except Exception:
+            pass
+
+        self.accept()
+
+        QtWidgets.QMessageBox.information(
+            None, "Track Chain  –  Done",
+            "Chain created!\n\n"
+            "  Links total      : {}\n"
+            "  Per straight side: {}\n"
+            "  Per curved side  : {}\n"
+            "  Direction        : {}\n"
+            "  Pitch            : {:.2f} mm\n"
+            "  Curve radius     : {:.2f} mm\n"
+            "  Straight length  : {:.2f} mm\n\n"
+            "Object: \"{}\"".format(
+                N, N_straight, N_per_curve,
+                "Up (CCW)" if D > 0 else "Down (CW)",
+                pitch, radius, s_len, feat.Label)
+        )
+
+
+# ── entry point ───────────────────────────────────────────────────────────────
+
+def run():
+    try:
+        from PySide2 import QtWidgets, QtCore
+    except ImportError:
+        from PySide import QtGui as QtWidgets, QtCore
+
+    sel = FreeCADGui.Selection.getSelection()
+    if not sel:
+        QtWidgets.QMessageBox.warning(
+            None, "Track Chain",
+            "Select the track-link body in the 3-D view first,\n"
+            "then run the macro."
+        )
+        return
+
+    dlg = TrackChainDialog(sel[0])
+    dlg.show()                       # non-modal: 3-D view stays clickable
+
+    loop = QtCore.QEventLoop()
+    dlg.finished.connect(loop.quit)
+    loop.exec_()
+
+
+run()

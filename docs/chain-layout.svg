@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 350" font-family="system-ui,sans-serif">
+  <defs>
+    <marker id="ah-r" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
+      <polygon points="0,0 7,2.5 0,5" fill="#c62828"/>
+    </marker>
+    <marker id="ah-l" markerWidth="7" markerHeight="5" refX="0" refY="2.5" orient="auto">
+      <polygon points="7,0 0,2.5 7,5" fill="#c62828"/>
+    </marker>
+    <marker id="ah-b" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto">
+      <polygon points="0,0 6,2.5 0,5" fill="#37474f"/>
+    </marker>
+  </defs>
+
+  <!-- background -->
+  <rect width="640" height="350" fill="#f8fafd" rx="10" stroke="#dde3ea" stroke-width="1.5"/>
+
+  <!-- title -->
+  <text x="320" y="26" text-anchor="middle" font-size="14" font-weight="700" fill="#1a2733" letter-spacing="0.3">Track Chain — Oval Layout</text>
+
+  <!-- ===== LINK BODIES ===== -->
+  <!-- bottom straight (left → right) -->
+  <line x1="184" y1="260" x2="231" y2="260" stroke="#8bbbd8" stroke-width="14" stroke-linecap="round"/>
+  <line x1="231" y1="260" x2="277" y2="260" stroke="#8bbbd8" stroke-width="14" stroke-linecap="round"/>
+  <line x1="277" y1="260" x2="324" y2="260" stroke="#8bbbd8" stroke-width="14" stroke-linecap="round"/>
+  <line x1="324" y1="260" x2="370" y2="260" stroke="#8bbbd8" stroke-width="14" stroke-linecap="round"/>
+  <line x1="370" y1="260" x2="417" y2="260" stroke="#8bbbd8" stroke-width="14" stroke-linecap="round"/>
+  <!-- right arc -->
+  <line x1="417" y1="260" x2="462" y2="248" stroke="#8bbbd8" stroke-width="14" stroke-linecap="round"/>
+  <line x1="462" y1="248" x2="495" y2="215" stroke="#8bbbd8" stroke-width="14" stroke-linecap="round"/>
+  <line x1="495" y1="215" x2="507" y2="170" stroke="#8bbbd8" stroke-width="14" stroke-linecap="round"/>
+  <line x1="507" y1="170" x2="495" y2="125" stroke="#8bbbd8" stroke-width="14" stroke-linecap="round"/>
+  <line x1="495" y1="125" x2="462" y2="92" stroke="#8bbbd8" stroke-width="14" stroke-linecap="round"/>
+  <line x1="462" y1="92" x2="417" y2="80" stroke="#8bbbd8" stroke-width="14" stroke-linecap="round"/>
+  <!-- top straight (right → left) -->
+  <line x1="417" y1="80" x2="370" y2="80" stroke="#8bbbd8" stroke-width="14" stroke-linecap="round"/>
+  <line x1="370" y1="80" x2="324" y2="80" stroke="#8bbbd8" stroke-width="14" stroke-linecap="round"/>
+  <line x1="324" y1="80" x2="277" y2="80" stroke="#8bbbd8" stroke-width="14" stroke-linecap="round"/>
+  <line x1="277" y1="80" x2="231" y2="80" stroke="#8bbbd8" stroke-width="14" stroke-linecap="round"/>
+  <line x1="231" y1="80" x2="184" y2="80" stroke="#8bbbd8" stroke-width="14" stroke-linecap="round"/>
+  <!-- left arc -->
+  <line x1="184" y1="80" x2="139" y2="92" stroke="#8bbbd8" stroke-width="14" stroke-linecap="round"/>
+  <line x1="139" y1="92" x2="106" y2="125" stroke="#8bbbd8" stroke-width="14" stroke-linecap="round"/>
+  <line x1="106" y1="125" x2="94" y2="170" stroke="#8bbbd8" stroke-width="14" stroke-linecap="round"/>
+  <line x1="94" y1="170" x2="106" y2="215" stroke="#8bbbd8" stroke-width="14" stroke-linecap="round"/>
+  <line x1="106" y1="215" x2="139" y2="248" stroke="#8bbbd8" stroke-width="14" stroke-linecap="round"/>
+  <line x1="139" y1="248" x2="184" y2="260" stroke="#8bbbd8" stroke-width="14" stroke-linecap="round"/>
+
+  <!-- ===== PIN JOINTS ===== -->
+  <!-- bottom -->
+  <circle cx="184" cy="260" r="6" fill="#1e5d8c"/><circle cx="184" cy="260" r="2.8" fill="#f8fafd"/>
+  <circle cx="231" cy="260" r="6" fill="#1e5d8c"/><circle cx="231" cy="260" r="2.8" fill="#f8fafd"/>
+  <circle cx="277" cy="260" r="6" fill="#1e5d8c"/><circle cx="277" cy="260" r="2.8" fill="#f8fafd"/>
+  <circle cx="324" cy="260" r="6" fill="#1e5d8c"/><circle cx="324" cy="260" r="2.8" fill="#f8fafd"/>
+  <circle cx="370" cy="260" r="6" fill="#1e5d8c"/><circle cx="370" cy="260" r="2.8" fill="#f8fafd"/>
+  <circle cx="417" cy="260" r="6" fill="#1e5d8c"/><circle cx="417" cy="260" r="2.8" fill="#f8fafd"/>
+  <!-- right arc extra -->
+  <circle cx="462" cy="248" r="6" fill="#1e5d8c"/><circle cx="462" cy="248" r="2.8" fill="#f8fafd"/>
+  <circle cx="495" cy="215" r="6" fill="#1e5d8c"/><circle cx="495" cy="215" r="2.8" fill="#f8fafd"/>
+  <circle cx="507" cy="170" r="6" fill="#1e5d8c"/><circle cx="507" cy="170" r="2.8" fill="#f8fafd"/>
+  <circle cx="495" cy="125" r="6" fill="#1e5d8c"/><circle cx="495" cy="125" r="2.8" fill="#f8fafd"/>
+  <circle cx="462" cy="92"  r="6" fill="#1e5d8c"/><circle cx="462" cy="92"  r="2.8" fill="#f8fafd"/>
+  <circle cx="417" cy="80"  r="6" fill="#1e5d8c"/><circle cx="417" cy="80"  r="2.8" fill="#f8fafd"/>
+  <!-- top extra -->
+  <circle cx="370" cy="80" r="6" fill="#1e5d8c"/><circle cx="370" cy="80" r="2.8" fill="#f8fafd"/>
+  <circle cx="324" cy="80" r="6" fill="#1e5d8c"/><circle cx="324" cy="80" r="2.8" fill="#f8fafd"/>
+  <circle cx="277" cy="80" r="6" fill="#1e5d8c"/><circle cx="277" cy="80" r="2.8" fill="#f8fafd"/>
+  <circle cx="231" cy="80" r="6" fill="#1e5d8c"/><circle cx="231" cy="80" r="2.8" fill="#f8fafd"/>
+  <circle cx="184" cy="80"  r="6" fill="#1e5d8c"/><circle cx="184" cy="80"  r="2.8" fill="#f8fafd"/>
+  <!-- left arc extra -->
+  <circle cx="139" cy="92"  r="6" fill="#1e5d8c"/><circle cx="139" cy="92"  r="2.8" fill="#f8fafd"/>
+  <circle cx="106" cy="125" r="6" fill="#1e5d8c"/><circle cx="106" cy="125" r="2.8" fill="#f8fafd"/>
+  <circle cx="94"  cy="170" r="6" fill="#1e5d8c"/><circle cx="94"  cy="170" r="2.8" fill="#f8fafd"/>
+  <circle cx="106" cy="215" r="6" fill="#1e5d8c"/><circle cx="106" cy="215" r="2.8" fill="#f8fafd"/>
+  <circle cx="139" cy="248" r="6" fill="#1e5d8c"/><circle cx="139" cy="248" r="2.8" fill="#f8fafd"/>
+
+  <!-- ===== ARC CENTER CROSSHAIRS ===== -->
+  <line x1="179" y1="170" x2="189" y2="170" stroke="#90a4ae" stroke-width="1.2"/>
+  <line x1="184" y1="165" x2="184" y2="175" stroke="#90a4ae" stroke-width="1.2"/>
+  <line x1="412" y1="170" x2="422" y2="170" stroke="#90a4ae" stroke-width="1.2"/>
+  <line x1="417" y1="165" x2="417" y2="175" stroke="#90a4ae" stroke-width="1.2"/>
+
+  <!-- ===== DIRECTION ARROWS (CCW) ===== -->
+  <polygon points="295,253 310,260 295,267" fill="#43a047" opacity="0.75"/>
+  <polygon points="306,73 291,80 306,87"   fill="#43a047" opacity="0.75"/>
+  <text x="300" y="167" text-anchor="middle" font-size="24" fill="#43a047" opacity="0.55">↺</text>
+  <text x="300" y="184" text-anchor="middle" font-size="10" font-weight="600" fill="#43a047" letter-spacing="1">CCW</text>
+
+  <!-- ===== DIMENSION: PITCH ===== -->
+  <line x1="184" y1="272" x2="184" y2="286" stroke="#c62828" stroke-width="1.2"/>
+  <line x1="231" y1="272" x2="231" y2="286" stroke="#c62828" stroke-width="1.2"/>
+  <line x1="187" y1="280" x2="228" y2="280" stroke="#c62828" stroke-width="1.5"
+        marker-end="url(#ah-r)" marker-start="url(#ah-l)"/>
+  <text x="207" y="298" text-anchor="middle" font-size="11" fill="#c62828" font-style="italic">pitch</text>
+
+  <!-- ===== DIMENSION: RADIUS R ===== -->
+  <line x1="420" y1="163" x2="504" y2="163" stroke="#c62828" stroke-width="1.5"
+        stroke-dasharray="3,2" marker-end="url(#ah-r)"/>
+  <circle cx="417" cy="163" r="2.5" fill="#c62828"/>
+  <text x="462" y="156" text-anchor="middle" font-size="11" fill="#c62828" font-style="italic">R</text>
+
+  <!-- ===== SPAN: N_straight ===== -->
+  <line x1="184" y1="312" x2="417" y2="312" stroke="#37474f" stroke-width="1.2"/>
+  <line x1="184" y1="307" x2="184" y2="317" stroke="#37474f" stroke-width="1.2"/>
+  <line x1="417" y1="307" x2="417" y2="317" stroke="#37474f" stroke-width="1.2"/>
+  <text x="300" y="330" text-anchor="middle" font-size="11" fill="#37474f">N_straight = 5 links per side</text>
+
+  <!-- ===== LABEL: N_per_curve ===== -->
+  <text x="567" y="161" text-anchor="middle" font-size="11" fill="#37474f">N_per_curve</text>
+  <text x="567" y="175" text-anchor="middle" font-size="11" fill="#37474f">= 6 per arc</text>
+  <line x1="543" y1="168" x2="521" y2="168" stroke="#37474f" stroke-width="1"
+        stroke-dasharray="2,2" marker-end="url(#ah-b)"/>
+</svg>
