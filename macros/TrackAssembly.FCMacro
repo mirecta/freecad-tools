@@ -1,0 +1,629 @@
+# =============================================================================
+#  TrackAssembly.FCMacro  v1
+#  –  Complete track assembly: chain + drive wheels in one shot
+# =============================================================================
+#
+#  WORKFLOW
+#  --------
+#  1. Select the track-link body in the 3-D view, then run the macro.
+#  2. A dialog opens — the 3-D view stays fully interactive.
+#  3. Click the LEFT hole edge, then [Pick Left Joint].
+#     Click the RIGHT hole edge, then [Pick Right Joint].
+#  4. Set wheel diameter D, width W, hub bore, and link body height H.
+#  5. The Computed panel shows N_per_arc, total links, arc radius, etc.
+#  6. Set links per straight side and loop direction.
+#  7. Choose which objects to generate (chain, left wheel, right wheel).
+#  8. Click [Generate Assembly].
+#
+#  OUTPUT
+#  ------
+#  • TrackChain_<N>links_<up|down>  — chain compound (N copies of the link)
+#  • Wheel_Left_D<D>mm              — left wheel cylinder  (optional)
+#  • Wheel_Right_D<D>mm             — right wheel cylinder (optional)
+#
+#  GEOMETRY
+#  --------
+#  Wheel diameter D drives N_per_arc = round(π / (2·arcsin(pitch/D))).
+#  Arc radius    R = pitch / (2·sin(π / (2·N_per_arc)))   (chord-based)
+#  Total links   N = 2·N_per_arc + 2·N_straight
+#  Wheel centers at (±half_straight, 0) in world space — exactly at the
+#  arc centers so the chain rides flush on the wheel rims.
+#
+#  MINIMUM WHEEL DIAMETER
+#  ----------------------
+#  R_min = pitch² / H  +  H / 4     (link body must clear the rim)
+#  D_min = 2 × R_min
+#
+# =============================================================================
+
+import FreeCAD
+import FreeCADGui
+import Part
+import math
+
+try:
+    from PySide2 import QtWidgets, QtCore, QtGui
+except ImportError:
+    from PySide  import QtGui as QtWidgets, QtCore
+
+
+# ── diagram ───────────────────────────────────────────────────────────────────
+
+class _LinkDiagram(QtWidgets.QWidget):
+    """Top-down chain link: labels Left Joint, Right Joint, pitch."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(300, 86)
+
+    def paintEvent(self, _ev):
+        qp = QtGui.QPainter(self)
+        qp.setRenderHint(QtGui.QPainter.Antialiasing)
+        W, H  = self.width(), self.height()
+        FILL  = QtGui.QColor(144, 187, 216)
+        STR   = QtGui.QColor(30,  93,  140)
+        DIM   = QtGui.QColor(198, 40,   40)
+        TXT   = QtGui.QColor(50,  60,   70)
+        WH    = QtGui.QColor(248, 250,  252)
+
+        qp.fillRect(self.rect(), WH)
+
+        pad = 28; bh = 34; bx = pad; bw = W - 2*pad; by = 18
+        qp.setBrush(FILL); qp.setPen(QtGui.QPen(STR, 2))
+        qp.drawRoundedRect(bx, by, bw, bh, 13, 13)
+
+        jr = 10; cy = by + bh // 2
+        lx = bx + jr + 8; rx = bx + bw - jr - 8
+        for jx in (lx, rx):
+            qp.setBrush(STR); qp.setPen(QtCore.Qt.NoPen)
+            qp.drawEllipse(jx - jr, cy - jr, jr*2, jr*2)
+            qp.setBrush(WH)
+            qp.drawEllipse(jx - 4, cy - 4, 8, 8)
+
+        font = QtGui.QFont(); font.setPointSize(8); qp.setFont(font)
+        fm = qp.fontMetrics()
+        qp.setPen(TXT)
+        for jx, txt in ((lx, "Left Joint"), (rx, "Right Joint")):
+            qp.drawText(jx - fm.width(txt)//2, by - 4, txt)
+
+        ay = by + bh + 12
+        qp.setPen(QtGui.QPen(DIM, 1.5))
+        for jx in (lx, rx):
+            qp.drawLine(jx, by + bh + 3, jx, ay - 2)
+        qp.drawLine(lx + 9, ay, rx - 9, ay)
+        for jx, sg in ((lx, 1), (rx, -1)):
+            path = QtGui.QPainterPath()
+            path.moveTo(jx, ay)
+            path.lineTo(jx + sg*9, ay - 3)
+            path.lineTo(jx + sg*9, ay + 3)
+            path.closeSubpath()
+            qp.fillPath(path, DIM)
+        qp.setPen(DIM)
+        lbl = "pitch"
+        qp.drawText((lx + rx)//2 - fm.width(lbl)//2, ay + 13, lbl)
+        qp.end()
+
+
+# ── dialog ────────────────────────────────────────────────────────────────────
+
+class TrackAssemblyDialog(QtWidgets.QDialog):
+
+    def __init__(self, base_obj):
+        super().__init__(FreeCADGui.getMainWindow())
+        self.base_obj    = base_obj
+        self.left_joint  = None
+        self.right_joint = None
+        self.setWindowTitle("Track Assembly Builder  v1")
+        self.setWindowFlags(QtCore.Qt.Window | QtCore.Qt.WindowStaysOnTopHint)
+        self._build_ui()
+        self._update_computed()
+        self._validate()
+
+    # ── UI ────────────────────────────────────────────────────────────────────
+
+    def _build_ui(self):
+        root = QtWidgets.QVBoxLayout(self)
+        root.setSpacing(8)
+
+        # selected link
+        obj_grp = QtWidgets.QGroupBox("Track link element")
+        ol = QtWidgets.QHBoxLayout(obj_grp)
+        ol.addWidget(QtWidgets.QLabel(
+            "<b>{}</b>".format(self.base_obj.Label if self.base_obj else "none")
+        ))
+        root.addWidget(obj_grp)
+
+        root.addWidget(self._banner(
+            "<b>How to pick a joint:</b><br>"
+            "① Click a circular hole <b>edge</b> in the 3-D view  (turns orange)<br>"
+            "② Click the matching <b>Pick</b> button below"
+        ))
+
+        # ── joint pickers ─────────────────────────────────────────────────────
+        joints_grp = QtWidgets.QGroupBox("Joint connection points")
+        jv = QtWidgets.QVBoxLayout(joints_grp)
+        diag_row = QtWidgets.QHBoxLayout()
+        diag_row.addStretch()
+        diag_row.addWidget(_LinkDiagram())
+        diag_row.addStretch()
+        jv.addLayout(diag_row)
+
+        jg = QtWidgets.QGridLayout()
+        jg.setColumnStretch(1, 1)
+
+        self.left_icon   = QtWidgets.QLabel("○"); self.left_icon.setFixedWidth(20)
+        self.left_coords = QtWidgets.QLabel("<i>not picked</i>")
+        self.btn_left    = QtWidgets.QPushButton("⬅  Pick Left Joint")
+        self.btn_left.setToolTip(
+            "① Click the LEFT hole edge in the 3-D view\n② Click this button")
+        self.btn_left.clicked.connect(self._on_pick_left)
+
+        self.right_icon   = QtWidgets.QLabel("○"); self.right_icon.setFixedWidth(20)
+        self.right_coords = QtWidgets.QLabel("<i>not picked</i>")
+        self.btn_right    = QtWidgets.QPushButton("Pick Right Joint  ➡")
+        self.btn_right.setToolTip(
+            "① Click the RIGHT hole edge in the 3-D view\n② Click this button")
+        self.btn_right.clicked.connect(self._on_pick_right)
+
+        jg.addWidget(self.left_icon,    0, 0)
+        jg.addWidget(self.left_coords,  0, 1)
+        jg.addWidget(self.btn_left,     0, 2)
+        jg.addWidget(self.right_icon,   1, 0)
+        jg.addWidget(self.right_coords, 1, 1)
+        jg.addWidget(self.btn_right,    1, 2)
+        jv.addLayout(jg)
+        root.addWidget(joints_grp)
+
+        root.addWidget(self._hsep())
+
+        # ── loop direction ─────────────────────────────────────────────────────
+        dir_grp = QtWidgets.QGroupBox("Loop direction")
+        dir_lay = QtWidgets.QHBoxLayout(dir_grp)
+        self.radio_up   = QtWidgets.QRadioButton("↑  Up   (CCW)")
+        self.radio_down = QtWidgets.QRadioButton("↓  Down  (CW)")
+        self.radio_up.setChecked(True)
+        self.radio_up.toggled.connect(self._update_dir_diagram)
+        dir_lay.addWidget(self.radio_up)
+        dir_lay.addWidget(self.radio_down)
+        self.dir_diagram = QtWidgets.QLabel()
+        self.dir_diagram.setAlignment(QtCore.Qt.AlignCenter)
+        self.dir_diagram.setStyleSheet(
+            "font-family:monospace; font-size:11px; color:#333;"
+            "background:#f5f5f5; border:1px solid #ccc; border-radius:4px; padding:4px;"
+        )
+        self._update_dir_diagram()
+        dir_lay.addWidget(self.dir_diagram)
+        root.addWidget(dir_grp)
+
+        root.addWidget(self._hsep())
+
+        # ── wheel parameters ───────────────────────────────────────────────────
+        wheel_grp = QtWidgets.QGroupBox("Wheel parameters")
+        wf = QtWidgets.QFormLayout(wheel_grp)
+
+        self.spin_D = QtWidgets.QDoubleSpinBox()
+        self.spin_D.setRange(1.0, 99999.0); self.spin_D.setDecimals(3)
+        self.spin_D.setSuffix(" mm"); self.spin_D.setValue(80.0)
+        self.spin_D.valueChanged.connect(self._on_param_changed)
+        wf.addRow("Wheel diameter D:", self.spin_D)
+
+        self.spin_W = QtWidgets.QDoubleSpinBox()
+        self.spin_W.setRange(0.1, 9999.0); self.spin_W.setDecimals(3)
+        self.spin_W.setSuffix(" mm"); self.spin_W.setValue(20.0)
+        self.spin_W.valueChanged.connect(self._on_param_changed)
+        wf.addRow("Wheel width W:", self.spin_W)
+
+        self.spin_hub = QtWidgets.QDoubleSpinBox()
+        self.spin_hub.setRange(0.0, 9999.0); self.spin_hub.setDecimals(3)
+        self.spin_hub.setSuffix(" mm"); self.spin_hub.setValue(10.0)
+        self.spin_hub.valueChanged.connect(self._on_param_changed)
+        wf.addRow("Hub bore ⌀:", self.spin_hub)
+        wf.addRow("", self._hint("0 = solid wheel  ·  bore must be < D"))
+
+        self.spin_H = QtWidgets.QDoubleSpinBox()
+        self.spin_H.setRange(0.1, 9999.0); self.spin_H.setDecimals(3)
+        self.spin_H.setSuffix(" mm"); self.spin_H.setValue(8.0)
+        self.spin_H.valueChanged.connect(self._on_param_changed)
+        wf.addRow("Link body height H:", self.spin_H)
+        wf.addRow("", self._hint("height of the link body — drives minimum wheel diameter"))
+
+        root.addWidget(wheel_grp)
+
+        root.addWidget(self._hsep())
+
+        # ── chain parameters ───────────────────────────────────────────────────
+        chain_grp = QtWidgets.QGroupBox("Chain parameters")
+        cf = QtWidgets.QFormLayout(chain_grp)
+
+        self.spin_s = QtWidgets.QSpinBox()
+        self.spin_s.setRange(0, 9998); self.spin_s.setValue(8)
+        self.spin_s.valueChanged.connect(self._on_param_changed)
+        cf.addRow("Links per straight side:", self.spin_s)
+        cf.addRow("", self._hint("0 = pure circle  ·  higher = longer oval"))
+
+        root.addWidget(chain_grp)
+
+        root.addWidget(self._hsep())
+
+        # ── computed panel ─────────────────────────────────────────────────────
+        comp_grp = QtWidgets.QGroupBox("Computed")
+        comp_grp.setStyleSheet("QGroupBox { background:#f0f4f8; border-radius:4px; }")
+        cfl = QtWidgets.QFormLayout(comp_grp)
+
+        self.lbl_pitch    = QtWidgets.QLabel("—")
+        self.lbl_n_arc    = QtWidgets.QLabel("—")
+        self.lbl_n_total  = QtWidgets.QLabel("—")
+        self.lbl_radius   = QtWidgets.QLabel("—")
+        self.lbl_straight = QtWidgets.QLabel("—")
+        self.lbl_min_d    = QtWidgets.QLabel("—")
+
+        cfl.addRow("Pitch:",           self.lbl_pitch)
+        cfl.addRow("N per arc:",       self.lbl_n_arc)
+        cfl.addRow("Total links:",     self.lbl_n_total)
+        cfl.addRow("Arc radius:",      self.lbl_radius)
+        cfl.addRow("Straight / side:", self.lbl_straight)
+        cfl.addRow("Min wheel ⌀:",     self.lbl_min_d)
+
+        root.addWidget(comp_grp)
+
+        root.addWidget(self._hsep())
+
+        # ── what to generate ───────────────────────────────────────────────────
+        gen_grp = QtWidgets.QGroupBox("Generate")
+        gh = QtWidgets.QHBoxLayout(gen_grp)
+        self.check_chain       = QtWidgets.QCheckBox("Chain")
+        self.check_wheel_left  = QtWidgets.QCheckBox("Left wheel")
+        self.check_wheel_right = QtWidgets.QCheckBox("Right wheel")
+        for cb in (self.check_chain, self.check_wheel_left, self.check_wheel_right):
+            cb.setChecked(True)
+            gh.addWidget(cb)
+        gh.addStretch()
+        root.addWidget(gen_grp)
+
+        # ── buttons ────────────────────────────────────────────────────────────
+        btn_row = QtWidgets.QHBoxLayout()
+        self.gen_btn = QtWidgets.QPushButton("Generate Assembly")
+        self.gen_btn.setDefault(True)
+        self.gen_btn.setEnabled(False)
+        self.gen_btn.clicked.connect(self._on_generate)
+        cancel_btn = QtWidgets.QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addStretch()
+        btn_row.addWidget(cancel_btn)
+        btn_row.addWidget(self.gen_btn)
+        root.addLayout(btn_row)
+
+        self.setMinimumWidth(480)
+
+    # ── helpers ───────────────────────────────────────────────────────────────
+
+    def _banner(self, html):
+        lbl = QtWidgets.QLabel(html)
+        lbl.setStyleSheet(
+            "background:#fffbe6; border:1px solid #f0c040;"
+            "border-radius:4px; padding:6px;")
+        lbl.setWordWrap(True)
+        return lbl
+
+    def _hint(self, txt):
+        lbl = QtWidgets.QLabel(txt)
+        lbl.setStyleSheet("color:gray; font-size:10px;")
+        lbl.setWordWrap(True)
+        return lbl
+
+    def _hsep(self):
+        sep = QtWidgets.QFrame()
+        sep.setFrameShape(QtWidgets.QFrame.HLine)
+        sep.setFrameShadow(QtWidgets.QFrame.Sunken)
+        return sep
+
+    def _update_dir_diagram(self):
+        if self.radio_up.isChecked():
+            self.dir_diagram.setText(
+                "  ╭──────────────╮\n"
+                "  │  ↑  UP loop  │\n"
+                "  ╰──────────────╯\n"
+                "  ══════════════  "
+            )
+        else:
+            self.dir_diagram.setText(
+                "  ══════════════  \n"
+                "  ╭─────────────╮\n"
+                "  │ ↓ DOWN loop │\n"
+                "  ╰─────────────╯"
+            )
+
+    # ── joint picking ─────────────────────────────────────────────────────────
+
+    def _read_circle(self):
+        for item in FreeCADGui.Selection.getSelectionEx():
+            for sub in item.SubObjects:
+                if hasattr(sub, "Curve") and hasattr(sub.Curve, "Center"):
+                    c = sub.Curve.Center
+                    return FreeCAD.Vector(c.x, c.y, c.z)
+        return None
+
+    def _fmt(self, v):
+        return "({:.2f},  {:.2f},  {:.2f})".format(v.x, v.y, v.z)
+
+    def _warn_no_circle(self):
+        QtWidgets.QMessageBox.warning(
+            self, "No circular edge selected",
+            "No circular edge found in the current selection.\n\n"
+            "• Click directly on the rim of the hole (not the flat face)\n"
+            "• The edge turns orange when selected\n"
+            "• Then click the Pick button"
+        )
+
+    def _on_pick_left(self):
+        c = self._read_circle()
+        if c is None:
+            self._warn_no_circle(); return
+        self.left_joint = c
+        self.left_icon.setText("✅")
+        self.left_coords.setText(self._fmt(c))
+        self._on_param_changed()
+
+    def _on_pick_right(self):
+        c = self._read_circle()
+        if c is None:
+            self._warn_no_circle(); return
+        self.right_joint = c
+        self.right_icon.setText("✅")
+        self.right_coords.setText(self._fmt(c))
+        self._on_param_changed()
+
+    def _on_param_changed(self, _=None):
+        self._update_computed()
+        self._validate()
+
+    # ── math ──────────────────────────────────────────────────────────────────
+
+    def _pitch(self):
+        j1, j2 = self.left_joint, self.right_joint
+        if j1 is None or j2 is None:
+            return None
+        return math.sqrt((j2.x-j1.x)**2 + (j2.y-j1.y)**2 + (j2.z-j1.z)**2)
+
+    def _n_per_arc(self, pitch, D):
+        arg = pitch / D
+        if arg >= 1.0:
+            return None
+        return max(2, round(math.pi / (2.0 * math.asin(arg))))
+
+    def _r_min(self, pitch, H):
+        return pitch**2 / H + H / 4.0
+
+    # ── computed labels ───────────────────────────────────────────────────────
+
+    def _update_computed(self):
+        p = self._pitch()
+        if p is None:
+            for lbl in (self.lbl_pitch, self.lbl_n_arc, self.lbl_n_total,
+                        self.lbl_radius, self.lbl_straight, self.lbl_min_d):
+                lbl.setText("—")
+            return
+
+        D  = self.spin_D.value()
+        H  = self.spin_H.value()
+        Ns = self.spin_s.value()
+
+        self.lbl_pitch.setText("<b>{:.4f} mm</b>".format(p))
+
+        r_min = self._r_min(p, H)
+        d_min = 2.0 * r_min
+        ok_str = " ✅" if D >= d_min else " <b style='color:red'>⚠ too small</b>"
+        self.lbl_min_d.setText("<b>{:.2f} mm</b>".format(d_min) + ok_str)
+
+        n = self._n_per_arc(p, D)
+        if n is None:
+            msg = "<i style='color:red'>diameter too small for this pitch</i>"
+            for lbl in (self.lbl_n_arc, self.lbl_n_total,
+                        self.lbl_radius, self.lbl_straight):
+                lbl.setText(msg)
+            return
+
+        N      = 2 * n + 2 * Ns
+        radius = p / (2.0 * math.sin(math.pi / (2.0 * n)))
+        s_len  = Ns * p
+
+        self.lbl_n_arc.setText("<b>{}</b>  links per arc".format(n))
+        self.lbl_n_total.setText("<b>{}</b>  links".format(N))
+        self.lbl_radius.setText("<b>{:.3f} mm</b>".format(radius))
+        self.lbl_straight.setText(
+            "<b>{:.3f} mm</b>  ({} links)".format(s_len, Ns))
+
+    # ── validation ────────────────────────────────────────────────────────────
+
+    def _validate(self):
+        p = self._pitch()
+        ok = True
+        if p is None:
+            ok = False
+        else:
+            D   = self.spin_D.value()
+            H   = self.spin_H.value()
+            hub = self.spin_hub.value()
+            if self._n_per_arc(p, D) is None:
+                ok = False
+            elif D < 2.0 * self._r_min(p, H):
+                ok = False
+            elif hub >= D:
+                ok = False
+        self.gen_btn.setEnabled(ok)
+        return ok
+
+    # ── wheel solid ───────────────────────────────────────────────────────────
+
+    def _make_wheel(self, D, W, hub_bore, cx, cy, cz):
+        R    = D / 2.0
+        Rb   = hub_bore / 2.0
+        base = FreeCAD.Vector(cx, cy, cz - W / 2.0)
+        axis = FreeCAD.Vector(0, 0, 1)
+        disc = Part.makeCylinder(R, W, base, axis)
+        if Rb > 0.001:
+            bore_base = FreeCAD.Vector(cx, cy, cz - W / 2.0 - 1.0)
+            bore = Part.makeCylinder(Rb, W + 2.0, bore_base, axis)
+            return disc.cut(bore)
+        return disc
+
+    # ── generate ──────────────────────────────────────────────────────────────
+
+    def _on_generate(self):
+        if not self._validate():
+            return
+
+        j1  = self.left_joint
+        j2  = self.right_joint
+        p   = self._pitch()
+        D   = self.spin_D.value()
+        W   = self.spin_W.value()
+        hub = self.spin_hub.value()
+        Ns  = self.spin_s.value()
+        Ddir = +1.0 if self.radio_up.isChecked() else -1.0
+
+        n       = self._n_per_arc(p, D)
+        N       = 2 * n + 2 * Ns
+        radius  = p / (2.0 * math.sin(math.pi / (2.0 * n)))
+        half_sl = Ns * p / 2.0
+
+        cx    = (j1.x + j2.x) / 2.0
+        cy    = (j1.y + j2.y) / 2.0
+        cz    = (j1.z + j2.z) / 2.0
+        e_ang = math.degrees(math.atan2(j2.y - j1.y, j2.x - j1.x))
+
+        doc     = FreeCAD.ActiveDocument
+        created = []
+
+        # ── chain ─────────────────────────────────────────────────────────────
+        if self.check_chain.isChecked():
+            base_shape = self.base_obj.Shape
+
+            def _mat(tx, ty_raw, chain_deg_raw):
+                ty        = Ddir * ty_raw
+                chain_deg = Ddir * chain_deg_raw
+                a  = math.radians(chain_deg - e_ang)
+                ca, sa = math.cos(a), math.sin(a)
+                m = FreeCAD.Matrix()
+                m.A11 = ca;  m.A12 = -sa; m.A13 = 0; m.A14 = tx - ca*cx + sa*cy
+                m.A21 = sa;  m.A22 =  ca; m.A23 = 0; m.A24 = ty - sa*cx - ca*cy
+                m.A31 =  0;  m.A32 =   0; m.A33 = 1; m.A34 = 0
+                m.A41 =  0;  m.A42 =   0; m.A43 = 0; m.A44 = 1
+                return m
+
+            shapes = []
+            aS = 180.0 / n
+
+            def _add(tx, ty, deg):
+                shapes.append(base_shape.transformGeometry(_mat(tx, ty, deg)))
+
+            # bottom straight  →
+            for i in range(Ns):
+                _add(-half_sl + p/2 + i*p, -radius, 0.0)
+
+            # right arc  (−90° → +90°)
+            for i in range(n):
+                phi0 = math.radians(-90.0 +  i      * aS)
+                phi1 = math.radians(-90.0 + (i + 1) * aS)
+                px0 = half_sl + radius * math.cos(phi0); py0 = radius * math.sin(phi0)
+                px1 = half_sl + radius * math.cos(phi1); py1 = radius * math.sin(phi1)
+                _add((px0+px1)/2, (py0+py1)/2,
+                     math.degrees(math.atan2(py1-py0, px1-px0)))
+
+            # top straight  ←
+            for i in range(Ns):
+                _add(half_sl - p/2 - i*p, radius, 180.0)
+
+            # left arc  (+90° → +270°)
+            for i in range(n):
+                phi0 = math.radians(90.0 +  i      * aS)
+                phi1 = math.radians(90.0 + (i + 1) * aS)
+                px0 = -half_sl + radius * math.cos(phi0); py0 = radius * math.sin(phi0)
+                px1 = -half_sl + radius * math.cos(phi1); py1 = radius * math.sin(phi1)
+                _add((px0+px1)/2, (py0+py1)/2,
+                     math.degrees(math.atan2(py1-py0, px1-px0)))
+
+            compound = Part.makeCompound(shapes)
+            feat = doc.addObject("Part::Feature", "TrackChain")
+            feat.Shape = compound
+            feat.Label = "TrackChain_{}links_{}".format(
+                N, "up" if Ddir > 0 else "down")
+            created.append(feat.Label)
+
+        # ── wheels ────────────────────────────────────────────────────────────
+        for side, wx in (("Left", -half_sl), ("Right", half_sl)):
+            cb = self.check_wheel_left if side == "Left" else self.check_wheel_right
+            if not cb.isChecked():
+                continue
+            try:
+                shape = self._make_wheel(D, W, hub, wx, 0.0, cz)
+            except Exception as e:
+                QtWidgets.QMessageBox.critical(self, "Wheel Error", str(e))
+                return
+            label = "Wheel_{}_D{:.0f}mm".format(side, D)
+            feat = doc.addObject("Part::Feature", label)
+            feat.Shape = shape
+            feat.Label = label
+            created.append(label)
+
+        doc.recompute()
+
+        try:
+            FreeCADGui.ActiveDocument.activeView().viewTop()
+            FreeCADGui.SendMsgToActiveView("ViewFit")
+        except Exception:
+            pass
+
+        self.accept()
+
+        QtWidgets.QMessageBox.information(
+            None, "Track Assembly  –  Done",
+            "Assembly created!\n\n"
+            "  Pitch             : {:.4f} mm\n"
+            "  N per arc         : {}\n"
+            "  Total links       : {}\n"
+            "  Straight / side   : {} links  ({:.2f} mm)\n"
+            "  Arc radius        : {:.3f} mm\n"
+            "  Wheel diameter    : {:.3f} mm\n"
+            "  Wheel width       : {:.3f} mm\n"
+            "  Direction         : {}\n\n"
+            "Objects created:\n{}".format(
+                p, n, N, Ns, Ns*p, radius, D, W,
+                "Up (CCW)" if Ddir > 0 else "Down (CW)",
+                "\n".join("  • " + lbl for lbl in created)
+            )
+        )
+
+
+# ── entry point ───────────────────────────────────────────────────────────────
+
+def run():
+    try:
+        from PySide2 import QtWidgets, QtCore
+    except ImportError:
+        from PySide import QtGui as QtWidgets, QtCore
+
+    if not FreeCAD.ActiveDocument:
+        QtWidgets.QMessageBox.warning(
+            None, "Track Assembly",
+            "No active document.\nCreate or open a FreeCAD document first."
+        )
+        return
+
+    sel = FreeCADGui.Selection.getSelection()
+    if not sel:
+        QtWidgets.QMessageBox.warning(
+            None, "Track Assembly",
+            "Select the track-link body in the 3-D view first,\nthen run the macro."
+        )
+        return
+
+    dlg = TrackAssemblyDialog(sel[0])
+    dlg.show()
+
+    loop = QtCore.QEventLoop()
+    dlg.finished.connect(loop.quit)
+    loop.exec_()
+
+
+run()

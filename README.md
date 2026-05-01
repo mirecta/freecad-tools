@@ -115,6 +115,55 @@ A `Part::Feature` named `TrackChain_<N>links_<up|down>` is added to the active d
 
 ---
 
+### TrackAssembly — Complete Track Assembly Generator
+
+Generates the full track assembly in one shot: chain compound + one or both drive wheels.  
+This is the **recommended macro** — it replaces running TrackChain and Wheel separately.
+
+#### Features
+
+| | |
+|---|---|
+| Single workflow | Pick joints once, set wheel diameter, get chain + wheels together |
+| Wheel placement | Wheels are positioned exactly at the arc centers — chain rides flush on the rims |
+| Select what to generate | Independent checkboxes for chain, left wheel, right wheel |
+| All validation included | Minimum diameter guard, bore < D check, N_per_arc computed live |
+
+#### Parameters
+
+| Parameter | Default | Notes |
+|---|---|---|
+| Wheel diameter D | 80 mm | Drives N_per_arc automatically |
+| Wheel width W | 20 mm | Should be ≥ chain inner width |
+| Hub bore ⌀ | 10 mm | Set to 0 for solid wheel |
+| Link body height H | 8 mm | Drives minimum diameter check |
+| Links per straight side | 8 | 0 = pure circle |
+| Loop direction | Up (CCW) | Switch if chain wraps the wrong way |
+
+#### Output
+
+| Object | Name |
+|---|---|
+| Chain compound | `TrackChain_<N>links_<up\|down>` |
+| Left wheel | `Wheel_Left_D<D>mm` |
+| Right wheel | `Wheel_Right_D<D>mm` |
+
+#### Usage workflow
+
+```mermaid
+flowchart LR
+    A([Select link body\nin 3-D view]) --> B([Run macro])
+    B --> C([Pick Left Joint\nthen Right Joint])
+    C --> D([Set wheel D, W,\nhub bore, H])
+    D --> E([Set N_straight\nand direction])
+    E --> F{D ≥ D_min?}
+    F -- yes --> G([Generate Assembly])
+    F -- no  --> D
+    G --> H([Chain + wheels\nadded to document])
+```
+
+---
+
 ### Wheel — Track Wheel Generator
 
 Generates a smooth cylindrical wheel that a track chain wraps around.  
