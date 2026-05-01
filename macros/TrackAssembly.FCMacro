@@ -189,9 +189,29 @@ _SVG_DATA_SYM = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 110
   <text x="228" y="103" text-anchor="middle" font-size="8" fill="#c62828">W</text>
 </svg>"""
 
+_SVG_DIR  = 'dir'
+
+_SVG_DATA_DIR = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 100" font-family="system-ui,sans-serif">
+  <rect width="280" height="100" fill="#f8fafd"/>
+  <line x1="140" y1="8" x2="140" y2="92" stroke="#dde3ea" stroke-width="1"/>
+  <text x="70"  y="13" text-anchor="middle" font-size="9" font-style="italic" fill="#555">Up  (CCW)</text>
+  <text x="210" y="13" text-anchor="middle" font-size="9" font-style="italic" fill="#555">Down  (CW)</text>
+  <line x1="10"  y1="78" x2="45"  y2="78" stroke="#1e5d8c" stroke-width="3" stroke-linecap="round"/>
+  <line x1="95"  y1="78" x2="130" y2="78" stroke="#1e5d8c" stroke-width="3" stroke-linecap="round"/>
+  <path d="M 45,78 A 25,28 0 0,0 95,78" fill="none" stroke="#1e5d8c" stroke-width="3" stroke-linecap="round"/>
+  <polygon points="118,78 110,74 110,82" fill="#43a047"/>
+  <text x="70" y="72" text-anchor="middle" font-size="18" fill="#43a047" opacity="0.85">&#x21BA;</text>
+  <line x1="150" y1="27" x2="185" y2="27" stroke="#1e5d8c" stroke-width="3" stroke-linecap="round"/>
+  <line x1="235" y1="27" x2="270" y2="27" stroke="#1e5d8c" stroke-width="3" stroke-linecap="round"/>
+  <path d="M 185,27 A 25,28 0 0,1 235,27" fill="none" stroke="#1e5d8c" stroke-width="3" stroke-linecap="round"/>
+  <polygon points="162,27 170,23 170,31" fill="#c62828"/>
+  <text x="210" y="42" text-anchor="middle" font-size="18" fill="#c62828" opacity="0.85">&#x21BB;</text>
+</svg>"""
+
 _DIAG_SVG = {
     'link': _SVG_DATA_LINK, 'wheel': _SVG_DATA_WHEEL,
-    'h':    _SVG_DATA_H,    'dist':  _SVG_DATA_DIST,    'sym': _SVG_DATA_SYM,
+    'h':    _SVG_DATA_H,    'dist':  _SVG_DATA_DIST,
+    'sym':  _SVG_DATA_SYM,  'dir':   _SVG_DATA_DIR,
 }
 _DIAG_CACHE = {}
 
@@ -361,9 +381,39 @@ def _mk_sym_pm():
     p.drawText(QtCore.QRect(s(215),s(93),s(22),s(12)),_Qt_AlignCenter,"W")
     p.end(); return pm
 
+def _mk_dir_pm():
+    pm, p, s = _pm2(280, 100)
+    CB  = QtGui.QColor(30, 93, 140)
+    CG  = QtGui.QColor(120, 120, 120)
+    CUp = QtGui.QColor(67, 160, 71)
+    CDn = QtGui.QColor(198, 40, 40)
+    p.setPen(QtGui.QPen(QtGui.QColor(220, 227, 234), s(1)))
+    p.drawLine(s(140), s(8), s(140), s(92))
+    p.setPen(QtGui.QPen(CG)); p.setFont(_f(s(9), italic=True))
+    p.drawText(QtCore.QRect(s(10),s(2),s(120),s(13)),_Qt_AlignCenter,"Up  (CCW)")
+    p.drawText(QtCore.QRect(s(150),s(2),s(120),s(13)),_Qt_AlignCenter,"Down  (CW)")
+    pen = QtGui.QPen(CB, s(3)); p.setPen(pen); p.setBrush(QtGui.QBrush())
+    p.drawLine(s(10),s(78),s(45),s(78)); p.drawLine(s(95),s(78),s(130),s(78))
+    path = QtGui.QPainterPath()
+    path.moveTo(s(45),s(78)); path.cubicTo(s(45),s(50),s(95),s(50),s(95),s(78))
+    p.drawPath(path)
+    _tri(p,((s(118),s(78)),(s(110),s(74)),(s(110),s(82))),CUp)
+    p.setPen(QtGui.QPen(CUp)); p.setFont(_f(s(18)))
+    p.drawText(QtCore.QRect(s(52),s(55),s(36),s(22)),_Qt_AlignCenter,"↺")
+    pen2 = QtGui.QPen(CB, s(3)); p.setPen(pen2); p.setBrush(QtGui.QBrush())
+    p.drawLine(s(150),s(27),s(185),s(27)); p.drawLine(s(235),s(27),s(270),s(27))
+    path2 = QtGui.QPainterPath()
+    path2.moveTo(s(185),s(27)); path2.cubicTo(s(185),s(55),s(235),s(55),s(235),s(27))
+    p.drawPath(path2)
+    _tri(p,((s(162),s(27)),(s(170),s(23)),(s(170),s(31))),CDn)
+    p.setPen(QtGui.QPen(CDn)); p.setFont(_f(s(18)))
+    p.drawText(QtCore.QRect(s(192),s(30),s(36),s(22)),_Qt_AlignCenter,"↻")
+    p.end(); return pm
+
 _DIAG_PAINTER = {
     'link': _mk_link_pm, 'wheel': _mk_wheel_pm,
-    'h':    _mk_h_pm,    'dist':  _mk_dist_pm,    'sym': _mk_sym_pm,
+    'h':    _mk_h_pm,    'dist':  _mk_dist_pm,
+    'sym':  _mk_sym_pm,  'dir':   _mk_dir_pm,
 }
 
 
@@ -551,32 +601,11 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         self.radio_up   = QtWidgets.QRadioButton("↑  Up   (CCW)")
         self.radio_down = QtWidgets.QRadioButton("↓  Down  (CW)")
         self.radio_up.setChecked(True)
-        dir_tip = (
-            "Up (CCW):   curved sections extend ABOVE the straight runs\n"
-            "\n"
-            "        ╭──── arc ────╮\n"
-            "        │             │\n"
-            "════════╯             ╰════════\n"
-            "\n"
-            "Down (CW):  curved sections extend BELOW the straight runs\n"
-            "\n"
-            "════════╮             ╭════════\n"
-            "        │             │\n"
-            "        ╰──── arc ────╯"
-        )
-        self.radio_up.setToolTip(dir_tip)
-        self.radio_down.setToolTip(dir_tip)
-        self.radio_up.toggled.connect(self._update_dir_diagram)
+        for rb in (self.radio_up, self.radio_down):
+            _attach_svg_tip(rb, _SVG_DIR,
+                            caption="Up (CCW): arc above straights\nDown (CW): arc below straights")
         dir_lay.addWidget(self.radio_up)
         dir_lay.addWidget(self.radio_down)
-        self.dir_diagram = QtWidgets.QLabel()
-        self.dir_diagram.setAlignment(_Qt_AlignCenter)
-        self.dir_diagram.setStyleSheet(
-            "font-family:monospace; font-size:11px; color:#333;"
-            "background:#f5f5f5; border:1px solid #ccc; border-radius:4px; padding:4px;"
-        )
-        self._update_dir_diagram()
-        dir_lay.addWidget(self.dir_diagram)
         root.addWidget(dir_grp)
 
         root.addWidget(self._hsep())
@@ -743,22 +772,6 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         sep.setFrameShape(QtWidgets.QFrame.HLine)
         sep.setFrameShadow(QtWidgets.QFrame.Sunken)
         return sep
-
-    def _update_dir_diagram(self):
-        if self.radio_up.isChecked():
-            self.dir_diagram.setText(
-                "  ╭──────────────╮\n"
-                "  │  ↑  UP loop  │\n"
-                "  ╰──────────────╯\n"
-                "  ══════════════  "
-            )
-        else:
-            self.dir_diagram.setText(
-                "  ══════════════  \n"
-                "  ╭─────────────╮\n"
-                "  │ ↓ DOWN loop │\n"
-                "  ╰─────────────╯"
-            )
 
     # ── joint picking ─────────────────────────────────────────────────────────
 
