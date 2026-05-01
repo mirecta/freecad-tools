@@ -353,23 +353,22 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         wf.addRow("Link body height H:", self.spin_H)
         wf.addRow("", self._hint("thickness of one link body  ·  sets polygon face depth"))
 
-        self.check_reverse = QtWidgets.QCheckBox("Reverse extrusion  (−Z)")
-        self.check_reverse.setChecked(False)
-        self.check_reverse.setToolTip(
-            "The chain lies in the global XY plane (Z = 0).\n"
-            "The wheel always starts at that plane and extrudes along Z.\n\n"
-            "  Unchecked  (+Z, default):\n"
-            "    wheel extends above the chain plane\n\n"
-            "    chain plane\n"
+        self.check_sym = QtWidgets.QCheckBox("Symmetric  (centred on Z = 0)")
+        self.check_sym.setChecked(True)
+        self.check_sym.setToolTip(
+            "The chain lies in the global XY plane (Z = 0).\n\n"
+            "  Checked  (symmetric, default):\n"
+            "    wheel centred on Z = 0, extends W/2 on each side\n\n"
+            "    Z = 0  (global plane)\n"
             "        │\n"
-            "    ────┤══════════   W →  +Z\n\n"
-            "  Checked  (−Z, reverse):\n"
-            "    wheel extends below the chain plane\n\n"
-            "    chain plane\n"
+            "    ════╪════   ← W/2 each side\n\n"
+            "  Unchecked  (one-sided):\n"
+            "    wheel starts at Z = 0, extends W in +Z\n\n"
+            "    Z = 0\n"
             "        │\n"
-            "    ════════════┤    W →  −Z"
+            "    ════╪══════════   ← full W in +Z"
         )
-        wf.addRow("", self.check_reverse)
+        wf.addRow("", self.check_sym)
 
         root.addWidget(wheel_grp)
 
@@ -622,15 +621,16 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
 
     # ── wheel solid ───────────────────────────────────────────────────────────
 
-    def _make_wheel(self, n, pitch, W, hub_bore, h_seg, reverse, cx, cy, cz):
+    def _make_wheel(self, n, pitch, W, hub_bore, h_seg, symmetric, cx, cy):
         """Regular polygon prism: 2*n sides.
         Each arc link midpoint sits at R·cos(π/(2n)) from wheel centre (chord
         midpoint, not R).  The link inner face is h_seg below that midpoint, so:
           apothem = R·cos(π/(2n)) − h_seg
           R_poly  = apothem / cos(π/(2n))   = R − h_seg/cos(π/(2n))
         Vertex at -90° so the bottom face aligns with the first arc link.
-        reverse=False: extrude from cz upward (+Z).
-        reverse=True:  extrude from cz downward (−Z)."""
+        Z reference is always the global plane (Z = 0).
+        symmetric=True:  wheel from −W/2 to +W/2 (centred on Z = 0).
+        symmetric=False: wheel from  0   to  +W  (+Z side only)."""
         R          = pitch / (2.0 * math.sin(math.pi / (2.0 * n)))
         Rb         = hub_bore / 2.0
         n_sides    = 2 * n
@@ -647,17 +647,16 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
 
         wire  = Part.makePolygon(pts)
         face  = Part.Face(wire)
-        extrude_dir = FreeCAD.Vector(0, 0, -W if reverse else W)
-        prism = face.extrude(extrude_dir)
+        prism = face.extrude(FreeCAD.Vector(0, 0, W))
 
+        z_offset = -W / 2.0 if symmetric else 0.0
         mat = FreeCAD.Matrix()
-        mat.move(FreeCAD.Vector(cx, cy, cz))
+        mat.move(FreeCAD.Vector(cx, cy, z_offset))
         prism = prism.transformGeometry(mat)
 
         if Rb > 0.001:
-            bore_z = cz - W - 1.0 if reverse else cz - 1.0
             bore = Part.makeCylinder(Rb, W + 2.0,
-                                     FreeCAD.Vector(cx, cy, bore_z),
+                                     FreeCAD.Vector(cx, cy, z_offset - 1.0),
                                      FreeCAD.Vector(0, 0, 1))
             prism = prism.cut(bore)
 
@@ -754,7 +753,7 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
                 continue
             try:
                 shape = self._make_wheel(n, p, W, hub, h_seg,
-                                         self.check_reverse.isChecked(), wx, 0.0, cz)
+                                         self.check_sym.isChecked(), wx, 0.0)
             except Exception as e:
                 QtWidgets.QMessageBox.critical(self, "Wheel Error", str(e))
                 return
