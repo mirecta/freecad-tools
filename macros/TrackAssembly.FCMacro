@@ -657,11 +657,13 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
 
         root.addWidget(chain_grp)
 
-        root.addWidget(self._hsep())
-
         # ── computed panel ─────────────────────────────────────────────────────
         comp_grp = QtWidgets.QGroupBox("Computed")
-        comp_grp.setStyleSheet("QGroupBox { background:#f0f4f8; border-radius:4px; }")
+        comp_grp.setStyleSheet(
+            "QGroupBox { background:#f0f4f8; border-radius:4px; margin-top:6px; }"
+            "QGroupBox::title { subcontrol-origin:margin; subcontrol-position:top left;"
+            " padding:0 4px; }"
+        )
         cfl = QtWidgets.QFormLayout(comp_grp)
 
         self.lbl_pitch      = QtWidgets.QLabel("—")
