@@ -285,7 +285,7 @@ class _SvgTip(QtWidgets.QFrame):
         return False
 
 
-def _attach_svg_tip(widget, key, w=0, h=0, caption="", tip_width=220):
+def _attach_svg_tip(widget, key, w=0, h=0, caption="", tip_width=280):
     """Attach an SVG diagram popup to widget on hover."""
     svg = _DIAG_SVG.get(key)
     if svg is None or _QtSvg is None:
