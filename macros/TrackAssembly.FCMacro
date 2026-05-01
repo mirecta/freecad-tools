@@ -241,22 +241,21 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         chain_grp = QtWidgets.QGroupBox("Chain parameters")
         cf = QtWidgets.QFormLayout(chain_grp)
 
-        self.spin_s = QtWidgets.QSpinBox()
-        self.spin_s.setRange(0, 9998); self.spin_s.setValue(8)
-        self.spin_s.setToolTip(
-            "Number of straight links on each side of the oval.\n\n"
-            "  ●──────────────●   ← N_straight links per side\n"
-            " ╱                ╲\n"
-            "│   N_per_arc each │  ← computed from wheel diameter\n"
-            " ╲                ╱\n"
-            "  ●──────────────●\n\n"
-            "0  = pure circle (chain wraps around two touching wheels)\n"
-            "1+ = oval chain; higher = longer straight sections\n\n"
-            "Total links = 2 × N_per_arc + 2 × N_straight"
+        self.spin_dist = QtWidgets.QDoubleSpinBox()
+        self.spin_dist.setRange(0.0, 999999.0); self.spin_dist.setDecimals(2)
+        self.spin_dist.setSuffix(" mm"); self.spin_dist.setValue(100.0)
+        self.spin_dist.setToolTip(
+            "Minimum centre-to-centre distance between the two wheels.\n\n"
+            "  ○ ←──── distance ────→ ○\n"
+            "  left wheel           right wheel\n\n"
+            "The macro rounds up to the nearest whole number of links:\n"
+            "  N_straight = ceil( distance / pitch )\n"
+            "  actual gap = N_straight × pitch  ≥ distance\n\n"
+            "Set to 0 for a pure circle (wheels touching, no straight run)."
         )
-        self.spin_s.valueChanged.connect(self._on_param_changed)
-        cf.addRow("Links per straight side:", self.spin_s)
-        cf.addRow("", self._hint("0 = pure circle  ·  higher = longer oval"))
+        self.spin_dist.valueChanged.connect(self._on_param_changed)
+        cf.addRow("Min wheel distance:", self.spin_dist)
+        cf.addRow("", self._hint("centre-to-centre  ·  0 = pure circle"))
 
         root.addWidget(chain_grp)
 
@@ -267,19 +266,21 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         comp_grp.setStyleSheet("QGroupBox { background:#f0f4f8; border-radius:4px; }")
         cfl = QtWidgets.QFormLayout(comp_grp)
 
-        self.lbl_pitch    = QtWidgets.QLabel("—")
-        self.lbl_n_arc    = QtWidgets.QLabel("—")
-        self.lbl_n_total  = QtWidgets.QLabel("—")
-        self.lbl_radius   = QtWidgets.QLabel("—")
-        self.lbl_straight = QtWidgets.QLabel("—")
-        self.lbl_min_d    = QtWidgets.QLabel("—")
+        self.lbl_pitch      = QtWidgets.QLabel("—")
+        self.lbl_n_arc      = QtWidgets.QLabel("—")
+        self.lbl_n_straight = QtWidgets.QLabel("—")
+        self.lbl_n_total    = QtWidgets.QLabel("—")
+        self.lbl_radius     = QtWidgets.QLabel("—")
+        self.lbl_straight   = QtWidgets.QLabel("—")
+        self.lbl_min_d      = QtWidgets.QLabel("—")
 
-        cfl.addRow("Pitch:",           self.lbl_pitch)
-        cfl.addRow("N per arc:",       self.lbl_n_arc)
-        cfl.addRow("Total links:",     self.lbl_n_total)
-        cfl.addRow("Arc radius:",      self.lbl_radius)
-        cfl.addRow("Straight / side:", self.lbl_straight)
-        cfl.addRow("Min wheel ⌀:",     self.lbl_min_d)
+        cfl.addRow("Pitch:",                self.lbl_pitch)
+        cfl.addRow("N per arc:",            self.lbl_n_arc)
+        cfl.addRow("N straight per side:",  self.lbl_n_straight)
+        cfl.addRow("Total links:",          self.lbl_n_total)
+        cfl.addRow("Arc radius:",           self.lbl_radius)
+        cfl.addRow("Actual wheel distance:", self.lbl_straight)
+        cfl.addRow("Min wheel ⌀:",          self.lbl_min_d)
 
         root.addWidget(comp_grp)
 
@@ -422,17 +423,24 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
 
     # ── computed labels ───────────────────────────────────────────────────────
 
+    def _n_straight(self, p):
+        dist = self.spin_dist.value()
+        if dist <= 0.0 or p <= 0.0:
+            return 0
+        return math.ceil(dist / p)
+
     def _update_computed(self):
         p = self._pitch()
         if p is None:
-            for lbl in (self.lbl_pitch, self.lbl_n_arc, self.lbl_n_total,
-                        self.lbl_radius, self.lbl_straight, self.lbl_min_d):
+            for lbl in (self.lbl_pitch, self.lbl_n_arc, self.lbl_n_straight,
+                        self.lbl_n_total, self.lbl_radius,
+                        self.lbl_straight, self.lbl_min_d):
                 lbl.setText("—")
             return
 
         D  = self.spin_D.value()
         H  = self.spin_H.value()
-        Ns = self.spin_s.value()
+        Ns = self._n_straight(p)
 
         self.lbl_pitch.setText("<b>{:.4f} mm</b>".format(p))
 
@@ -444,8 +452,8 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         n = self._n_per_arc(p, D)
         if n is None:
             msg = "<i style='color:red'>diameter too small for this pitch</i>"
-            for lbl in (self.lbl_n_arc, self.lbl_n_total,
-                        self.lbl_radius, self.lbl_straight):
+            for lbl in (self.lbl_n_arc, self.lbl_n_straight,
+                        self.lbl_n_total, self.lbl_radius, self.lbl_straight):
                 lbl.setText(msg)
             return
 
@@ -454,10 +462,11 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         s_len  = Ns * p
 
         self.lbl_n_arc.setText("<b>{}</b>  links per arc".format(n))
+        self.lbl_n_straight.setText("<b>{}</b>  links per side".format(Ns))
         self.lbl_n_total.setText("<b>{}</b>  links".format(N))
         self.lbl_radius.setText("<b>{:.3f} mm</b>".format(radius))
         self.lbl_straight.setText(
-            "<b>{:.3f} mm</b>  ({} links)".format(s_len, Ns))
+            "<b>{:.3f} mm</b>  ({} × pitch)".format(s_len, Ns))
 
     # ── validation ────────────────────────────────────────────────────────────
 
@@ -505,7 +514,7 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         D   = self.spin_D.value()
         W   = self.spin_W.value()
         hub = self.spin_hub.value()
-        Ns  = self.spin_s.value()
+        Ns  = self._n_straight(p)
         Ddir = +1.0 if self.radio_up.isChecked() else -1.0
 
         n       = self._n_per_arc(p, D)
@@ -608,7 +617,7 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
             "  Pitch             : {:.4f} mm\n"
             "  N per arc         : {}\n"
             "  Total links       : {}\n"
-            "  Straight / side   : {} links  ({:.2f} mm)\n"
+            "  Straight / side   : {} links  (actual {:.2f} mm)\n"
             "  Arc radius        : {:.3f} mm\n"
             "  Wheel diameter    : {:.3f} mm\n"
             "  Wheel width       : {:.3f} mm\n"
