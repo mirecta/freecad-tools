@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 88" font-family="system-ui,sans-serif">
+  <rect width="300" height="88" fill="#f8fafd"/>
+
+  <!-- link body -->
+  <rect x="28" y="22" width="244" height="32" rx="12" ry="12"
+        fill="#90bbd8" stroke="#1e5d8c" stroke-width="2"/>
+
+  <!-- left pin -->
+  <circle cx="54" cy="38" r="11" fill="#1e5d8c"/>
+  <circle cx="54" cy="38" r="4"  fill="#f8fafd"/>
+
+  <!-- right pin -->
+  <circle cx="246" cy="38" r="11" fill="#1e5d8c"/>
+  <circle cx="246" cy="38" r="4"  fill="#f8fafd"/>
+
+  <!-- pitch dimension line -->
+  <line x1="54" y1="57" x2="54"  y2="69" stroke="#c62828" stroke-width="1.5"/>
+  <line x1="246" y1="57" x2="246" y2="69" stroke="#c62828" stroke-width="1.5"/>
+  <line x1="54"  y1="65" x2="246" y2="65" stroke="#c62828" stroke-width="1.5"/>
+  <!-- left arrowhead -->
+  <polygon points="54,65 63,61 63,69" fill="#c62828"/>
+  <!-- right arrowhead -->
+  <polygon points="246,65 237,61 237,69" fill="#c62828"/>
+
+  <!-- labels -->
+  <text x="54"  y="13" text-anchor="middle" font-size="8" fill="#32404e">Left Joint</text>
+  <text x="246" y="13" text-anchor="middle" font-size="8" fill="#32404e">Right Joint</text>
+  <text x="150" y="80" text-anchor="middle" font-size="8" font-style="italic" fill="#c62828">pitch</text>
+</svg>

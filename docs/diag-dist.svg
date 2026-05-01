@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 90" font-family="system-ui,sans-serif">
+  <rect width="300" height="90" fill="#f8fafd"/>
+
+  <!-- left wheel -->
+  <circle cx="55" cy="42" r="28" fill="#90bbd8" stroke="#1e5d8c" stroke-width="1.5"/>
+  <circle cx="55" cy="42" r="7"  fill="#f8fafd" stroke="#1e5d8c" stroke-width="1"/>
+
+  <!-- right wheel -->
+  <circle cx="245" cy="42" r="28" fill="#90bbd8" stroke="#1e5d8c" stroke-width="1.5"/>
+  <circle cx="245" cy="42" r="7"  fill="#f8fafd" stroke="#1e5d8c" stroke-width="1"/>
+
+  <!-- tangent lines (dashed) -->
+  <line x1="55" y1="14" x2="245" y2="14" stroke="#1e5d8c" stroke-width="2" stroke-dasharray="6,4"/>
+  <line x1="55" y1="70" x2="245" y2="70" stroke="#1e5d8c" stroke-width="2" stroke-dasharray="6,4"/>
+
+  <!-- distance arrow -->
+  <line x1="55"  y1="82" x2="245" y2="82" stroke="#c62828" stroke-width="1.5"/>
+  <line x1="55"  y1="77" x2="55"  y2="87" stroke="#c62828" stroke-width="1.5"/>
+  <line x1="245" y1="77" x2="245" y2="87" stroke="#c62828" stroke-width="1.5"/>
+  <polygon points="55,82  65,78  65,86"  fill="#c62828"/>
+  <polygon points="245,82 235,78 235,86" fill="#c62828"/>
+  <text x="150" y="79" text-anchor="middle" font-size="9" font-style="italic" fill="#c62828">distance</text>
+</svg>
