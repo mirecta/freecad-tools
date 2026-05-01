@@ -191,25 +191,23 @@ _SVG_DATA_SYM = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 110
 
 _SVG_DIR  = 'dir'
 
-_SVG_DATA_DIR = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 95" font-family="system-ui,sans-serif">
-  <rect width="280" height="95" fill="#f8fafd"/>
-  <line x1="140" y1="5" x2="140" y2="90" stroke="#dde3ea" stroke-width="1"/>
+_SVG_DATA_DIR = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 115" font-family="system-ui,sans-serif">
+  <rect width="300" height="115" fill="#f8fafd"/>
+  <line x1="150" y1="5" x2="150" y2="110" stroke="#dde3ea" stroke-width="1"/>
 
-  <!-- Up (CCW): arc ABOVE the two straight runs -->
-  <text x="70" y="12" text-anchor="middle" font-size="9" font-style="italic" fill="#666">Up (CCW)</text>
-  <line x1="8"  y1="82" x2="43"  y2="82" stroke="#1e5d8c" stroke-width="3" stroke-linecap="round"/>
-  <line x1="97" y1="82" x2="132" y2="82" stroke="#1e5d8c" stroke-width="3" stroke-linecap="round"/>
-  <path d="M 43,82 A 27,42 0 0,0 97,82" fill="none" stroke="#1e5d8c" stroke-width="3" stroke-linecap="round"/>
-  <polygon points="120,82 112,78 112,86" fill="#43a047"/>
-  <text x="70" y="68" text-anchor="middle" font-size="14" fill="#43a047">&#x21BA;</text>
+  <!-- UP: chain loop sits ABOVE Z=0 plane -->
+  <text x="75" y="14" text-anchor="middle" font-size="11" font-weight="bold" fill="#43a047">UP</text>
+  <rect x="12" y="18" width="126" height="52" rx="26" ry="26"
+        fill="none" stroke="#1e5d8c" stroke-width="2.5"/>
+  <line x1="8"   y1="82" x2="142" y2="82" stroke="#c62828" stroke-width="1.5" stroke-dasharray="5,3"/>
+  <text x="75"   y="94"  text-anchor="middle" font-size="8" fill="#c62828">Z = 0</text>
 
-  <!-- Down (CW): arc BELOW the two straight runs -->
-  <text x="210" y="12" text-anchor="middle" font-size="9" font-style="italic" fill="#666">Down (CW)</text>
-  <line x1="148" y1="22" x2="183" y2="22" stroke="#1e5d8c" stroke-width="3" stroke-linecap="round"/>
-  <line x1="237" y1="22" x2="272" y2="22" stroke="#1e5d8c" stroke-width="3" stroke-linecap="round"/>
-  <path d="M 183,22 A 27,42 0 0,1 237,22" fill="none" stroke="#1e5d8c" stroke-width="3" stroke-linecap="round"/>
-  <polygon points="160,22 168,18 168,26" fill="#c62828"/>
-  <text x="210" y="38" text-anchor="middle" font-size="14" fill="#c62828">&#x21BB;</text>
+  <!-- DOWN: chain loop sits BELOW Z=0 plane -->
+  <text x="225" y="14" text-anchor="middle" font-size="11" font-weight="bold" fill="#c62828">DOWN</text>
+  <line x1="158" y1="26" x2="292" y2="26" stroke="#c62828" stroke-width="1.5" stroke-dasharray="5,3"/>
+  <text x="225"  y="38"  text-anchor="middle" font-size="8" fill="#c62828">Z = 0</text>
+  <rect x="162"  y="42"  width="126" height="52" rx="26" ry="26"
+        fill="none" stroke="#1e5d8c" stroke-width="2.5"/>
 </svg>"""
 
 _DIAG_SVG = {
@@ -386,32 +384,40 @@ def _mk_sym_pm():
     p.end(); return pm
 
 def _mk_dir_pm():
-    pm, p, s = _pm2(280, 95)
+    pm, p, s = _pm2(300, 115)
     CB  = QtGui.QColor(30, 93, 140)
-    CG  = QtGui.QColor(100, 100, 100)
     CUp = QtGui.QColor(67, 160, 71)
     CDn = QtGui.QColor(198, 40, 40)
-    p.setPen(QtGui.QPen(QtGui.QColor(220, 227, 234), s(1)))
-    p.drawLine(s(140), s(5), s(140), s(90))
-    p.setPen(QtGui.QPen(CG)); p.setFont(_f(s(9), italic=True))
-    p.drawText(QtCore.QRect(s(8),s(2),s(124),s(12)),_Qt_AlignCenter,"Up (CCW)")
-    p.drawText(QtCore.QRect(s(148),s(2),s(124),s(12)),_Qt_AlignCenter,"Down (CW)")
-    p.setPen(QtGui.QPen(CB, s(3))); p.setBrush(QtGui.QBrush())
-    p.drawLine(s(8),s(82),s(43),s(82)); p.drawLine(s(97),s(82),s(132),s(82))
-    path = QtGui.QPainterPath()
-    path.moveTo(s(43),s(82)); path.cubicTo(s(43),s(40),s(97),s(40),s(97),s(82))
-    p.drawPath(path)
-    _tri(p,((s(120),s(82)),(s(112),s(78)),(s(112),s(86))),CUp)
-    p.setPen(QtGui.QPen(CUp)); p.setFont(_f(s(14)))
-    p.drawText(QtCore.QRect(s(56),s(54),s(28),s(18)),_Qt_AlignCenter,"↺")
-    p.setPen(QtGui.QPen(CB, s(3))); p.setBrush(QtGui.QBrush())
-    p.drawLine(s(148),s(22),s(183),s(22)); p.drawLine(s(237),s(22),s(272),s(22))
-    path2 = QtGui.QPainterPath()
-    path2.moveTo(s(183),s(22)); path2.cubicTo(s(183),s(64),s(237),s(64),s(237),s(22))
-    p.drawPath(path2)
-    _tri(p,((s(160),s(22)),(s(168),s(18)),(s(168),s(26))),CDn)
-    p.setPen(QtGui.QPen(CDn)); p.setFont(_f(s(14)))
-    p.drawText(QtCore.QRect(s(196),s(28),s(28),s(18)),_Qt_AlignCenter,"↻")
+    CSep = QtGui.QColor(220, 227, 234)
+    # vertical divider
+    p.setPen(QtGui.QPen(CSep, s(1)))
+    p.drawLine(s(150), s(5), s(150), s(110))
+    # UP label (green, bold)
+    p.setPen(QtGui.QPen(CUp)); p.setFont(_f(s(11), bold=True))
+    p.drawText(QtCore.QRect(s(0),s(4),s(150),s(14)),_Qt_AlignCenter,"UP")
+    # UP oval (above Z=0)
+    p.setPen(QtGui.QPen(CB, s(2))); p.setBrush(QtGui.QBrush())
+    p.drawRoundedRect(QtCore.QRect(s(12),s(18),s(126),s(52)), s(26), s(26))
+    # UP Z=0 dashed line
+    pen = QtGui.QPen(CDn, s(1))
+    pen.setStyle(QtCore.Qt.PenStyle.DashLine if hasattr(QtCore.Qt,'PenStyle') else QtCore.Qt.DashLine)
+    p.setPen(pen)
+    p.drawLine(s(8), s(82), s(142), s(82))
+    p.setPen(QtGui.QPen(CDn)); p.setFont(_f(s(8)))
+    p.drawText(QtCore.QRect(s(20),s(84),s(110),s(12)),_Qt_AlignCenter,"Z = 0")
+    # DOWN label (red, bold)
+    p.setPen(QtGui.QPen(CDn)); p.setFont(_f(s(11), bold=True))
+    p.drawText(QtCore.QRect(s(150),s(4),s(150),s(14)),_Qt_AlignCenter,"DOWN")
+    # DOWN Z=0 dashed line
+    pen2 = QtGui.QPen(CDn, s(1))
+    pen2.setStyle(QtCore.Qt.PenStyle.DashLine if hasattr(QtCore.Qt,'PenStyle') else QtCore.Qt.DashLine)
+    p.setPen(pen2)
+    p.drawLine(s(158), s(26), s(292), s(26))
+    p.setPen(QtGui.QPen(CDn)); p.setFont(_f(s(8)))
+    p.drawText(QtCore.QRect(s(160),s(28),s(130),s(12)),_Qt_AlignCenter,"Z = 0")
+    # DOWN oval (below Z=0)
+    p.setPen(QtGui.QPen(CB, s(2))); p.setBrush(QtGui.QBrush())
+    p.drawRoundedRect(QtCore.QRect(s(162),s(42),s(126),s(52)), s(26), s(26))
     p.end(); return pm
 
 _DIAG_PAINTER = {
