@@ -569,10 +569,11 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
                 lbl.setText(msg)
             return
 
-        N       = 2 * n + 2 * Ns
-        radius  = p / (2.0 * math.sin(math.pi / (2.0 * n)))
-        apothem = radius - h_seg
-        s_len   = Ns * p
+        N          = 2 * n + 2 * Ns
+        radius     = p / (2.0 * math.sin(math.pi / (2.0 * n)))
+        half_angle = math.pi / (2 * n)
+        apothem    = radius * math.cos(half_angle) - h_seg
+        s_len      = Ns * p
 
         self.lbl_n_arc.setText("<b>{}</b>  links per arc".format(n))
         self.lbl_n_straight.setText("<b>{}</b>  links per side".format(Ns))
@@ -580,7 +581,7 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         self.lbl_radius.setText(
             "<b>{:.3f} mm</b>  →  {}-gon wheel".format(radius, 2 * n))
         self.lbl_apothem.setText(
-            "<b>{:.3f} mm</b>  (R − H/2 = face-to-centre)".format(apothem))
+            "<b>{:.3f} mm</b>  (R·cos(π/2n) − H/2)".format(apothem))
         self.lbl_straight.setText(
             "<b>{:.3f} mm</b>  ({} × pitch)".format(s_len, Ns))
 
@@ -605,15 +606,18 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
 
     def _make_wheel(self, n, pitch, W, hub_bore, h_seg, cx, cy, cz):
         """Regular polygon prism: 2*n sides.
-        Pin centres sit at arc radius R.  Link inner face is h_seg (= H/2)
-        below the pin centreline, so the polygon apothem = R − h_seg and the
-        polygon circumradius = apothem / cos(π / n_sides).
+        Each arc link midpoint sits at R·cos(π/(2n)) from wheel centre (chord
+        midpoint, not R).  The link inner face is h_seg below that midpoint, so:
+          apothem = R·cos(π/(2n)) − h_seg
+          R_poly  = apothem / cos(π/(2n))   = R − h_seg/cos(π/(2n))
         Vertex at -90° so the bottom face aligns with the first arc link."""
-        R       = pitch / (2.0 * math.sin(math.pi / (2.0 * n)))
-        Rb      = hub_bore / 2.0
-        n_sides = 2 * n
-        apothem = R - h_seg
-        R_poly  = apothem / math.cos(math.pi / n_sides)
+        R          = pitch / (2.0 * math.sin(math.pi / (2.0 * n)))
+        Rb         = hub_bore / 2.0
+        n_sides    = 2 * n
+        half_angle = math.pi / n_sides           # = π/(2n)
+        link_mid_r = R * math.cos(half_angle)    # chord-midpoint distance
+        apothem    = link_mid_r - h_seg
+        R_poly     = apothem / math.cos(half_angle)
 
         pts = []
         for i in range(n_sides):
