@@ -51,9 +51,17 @@ except ImportError:
 
 # Qt5/Qt6 enum compat shims
 try:
+    _Qt_NoPen       = QtCore.Qt.PenStyle.NoPen
+    _Qt_DashLine    = QtCore.Qt.PenStyle.DashLine
     _Qt_AlignCenter = QtCore.Qt.AlignmentFlag.AlignCenter
+    _Qt_AlignLeft   = QtCore.Qt.AlignmentFlag.AlignLeft
+    _Qt_Antialias   = QtGui.QPainter.RenderHint.Antialiasing
 except AttributeError:
+    _Qt_NoPen       = getattr(QtCore.Qt, 'NoPen')
+    _Qt_DashLine    = getattr(QtCore.Qt, 'DashLine')
     _Qt_AlignCenter = getattr(QtCore.Qt, 'AlignCenter')
+    _Qt_AlignLeft   = getattr(QtCore.Qt, 'AlignLeft')
+    _Qt_Antialias   = getattr(QtGui.QPainter, 'Antialiasing')
 
 
 # ── QtSvg import ─────────────────────────────────────────────────────────────
@@ -187,8 +195,6 @@ def _render_svg(svg_bytes, lw, lh):
     pm = QtGui.QPixmap(lw * 2, lh * 2)
     pm.setDevicePixelRatio(2.0)
     pm.fill(QtGui.QColor(248, 250, 252))
-    if _QtSvg is None:
-        return pm
     renderer = _QtSvg.QSvgRenderer(QtCore.QByteArray(svg_bytes))
     p = QtGui.QPainter(pm)
     renderer.render(p, QtCore.QRectF(0, 0, lw * 2, lh * 2))
@@ -196,13 +202,177 @@ def _render_svg(svg_bytes, lw, lh):
     return pm
 
 
+# ── QPainter fallback diagrams (used when QtSvg is not available) ─────────────
+
+def _pm2(W, H):
+    pm = QtGui.QPixmap(W * 2, H * 2)
+    pm.setDevicePixelRatio(2.0)
+    pm.fill(QtGui.QColor(248, 250, 252))
+    p = QtGui.QPainter(pm)
+    p.setRenderHint(_Qt_Antialias)
+    return pm, p, lambda v: int(round(v * 2))
+
+def _f(px, bold=False, italic=False):
+    f = QtGui.QFont(); f.setPixelSize(px); f.setBold(bold); f.setItalic(italic); return f
+
+def _tri(p, pts, c):
+    p.setPen(_Qt_NoPen); p.setBrush(QtGui.QBrush(c))
+    p.drawPolygon(QtGui.QPolygon([QtCore.QPoint(*pt) for pt in pts]))
+
+def _mk_link_pm():
+    pm, p, s = _pm2(300, 88)
+    CB = QtGui.QColor(144,187,216); CP = QtGui.QColor(30,93,140)
+    CW = QtGui.QColor(248,250,252); CR = QtGui.QColor(198,40,40)
+    p.setPen(QtGui.QPen(CP, s(2))); p.setBrush(QtGui.QBrush(CB))
+    p.drawRoundedRect(s(28),s(22),s(244),s(32),s(12),s(12))
+    for cx,cy in ((54,38),(246,38)):
+        p.setPen(_Qt_NoPen); p.setBrush(QtGui.QBrush(CP))
+        p.drawEllipse(s(cx)-s(11),s(cy)-s(11),s(22),s(22))
+        p.setBrush(QtGui.QBrush(CW))
+        p.drawEllipse(s(cx)-s(4),s(cy)-s(4),s(8),s(8))
+    p.setPen(QtGui.QPen(QtGui.QColor(50,64,78))); p.setFont(_f(s(8)))
+    p.drawText(QtCore.QRect(s(24),s(4),s(60),s(13)),_Qt_AlignCenter,"Left Joint")
+    p.drawText(QtCore.QRect(s(216),s(4),s(60),s(13)),_Qt_AlignCenter,"Right Joint")
+    p.setPen(QtGui.QPen(CR, s(1.5)))
+    for x in (54,246): p.drawLine(s(x),s(57),s(x),s(69))
+    p.drawLine(s(54),s(65),s(246),s(65))
+    _tri(p,((s(54),s(65)),(s(63),s(61)),(s(63),s(69))),CR)
+    _tri(p,((s(246),s(65)),(s(237),s(61)),(s(237),s(69))),CR)
+    p.setPen(QtGui.QPen(CR)); p.setFont(_f(s(8),italic=True))
+    p.drawText(QtCore.QRect(s(100),s(72),s(100),s(13)),_Qt_AlignCenter,"pitch")
+    p.end(); return pm
+
+def _mk_wheel_pm():
+    pm, p, s = _pm2(300, 132)
+    CB = QtGui.QColor(144,187,216); CP = QtGui.QColor(30,93,140)
+    CW = QtGui.QColor(248,250,252); CR = QtGui.QColor(198,40,40)
+    CG = QtGui.QColor(150,150,150)
+    p.setPen(QtGui.QPen(CG)); p.setFont(_f(s(8),italic=True))
+    p.drawText(QtCore.QRect(s(44),s(2),s(60),s(11)),_Qt_AlignCenter,"front view")
+    p.setPen(QtGui.QPen(CP, s(2))); p.setBrush(QtGui.QBrush(CB))
+    p.drawEllipse(s(74)-s(50),s(74)-s(50),s(100),s(100))
+    p.setPen(QtGui.QPen(CP, s(1.5))); p.setBrush(QtGui.QBrush(CW))
+    p.drawEllipse(s(74)-s(13),s(74)-s(13),s(26),s(26))
+    p.setPen(QtGui.QPen(CG, s(1))); p.drawLine(s(87),s(70),s(105),s(55))
+    p.setPen(QtGui.QPen(CG)); p.setFont(_f(s(8)))
+    p.drawText(QtCore.QRect(s(104),s(48),s(35),s(11)),_Qt_AlignLeft,"hub ⌀")
+    p.setPen(QtGui.QPen(CR, s(1.2)))
+    p.drawLine(s(127),s(24),s(140),s(24)); p.drawLine(s(127),s(124),s(140),s(124))
+    p.setPen(QtGui.QPen(CR, s(1.5))); p.drawLine(s(137),s(24),s(137),s(124))
+    _tri(p,((s(137),s(24)),(s(133),s(34)),(s(141),s(34))),CR)
+    _tri(p,((s(137),s(124)),(s(133),s(114)),(s(141),s(114))),CR)
+    p.setPen(QtGui.QPen(CR)); p.setFont(_f(s(11),bold=True))
+    p.drawText(QtCore.QRect(s(141),s(68),s(14),s(18)),_Qt_AlignCenter,"D")
+    p.setPen(QtGui.QPen(CG)); p.setFont(_f(s(8),italic=True))
+    p.drawText(QtCore.QRect(s(198),s(2),s(60),s(11)),_Qt_AlignCenter,"side view")
+    p.setPen(QtGui.QPen(CP, s(2))); p.setBrush(QtGui.QBrush(CB))
+    p.drawRect(s(202),s(24),s(52),s(100))
+    dp = QtGui.QPen(CP, s(1)); dp.setStyle(_Qt_DashLine)
+    p.setPen(dp); p.setBrush(QtGui.QBrush(CW)); p.drawRect(s(202),s(61),s(52),s(26))
+    p.setPen(QtGui.QPen(CR, s(1.5)))
+    p.drawLine(s(202),s(14),s(254),s(14))
+    p.drawLine(s(202),s(10),s(202),s(20)); p.drawLine(s(254),s(10),s(254),s(20))
+    _tri(p,((s(202),s(14)),(s(211),s(10)),(s(211),s(18))),CR)
+    _tri(p,((s(254),s(14)),(s(245),s(10)),(s(245),s(18))),CR)
+    p.setPen(QtGui.QPen(CR)); p.setFont(_f(s(10),bold=True))
+    p.drawText(QtCore.QRect(s(218),s(6),s(20),s(12)),_Qt_AlignCenter,"W")
+    p.setPen(QtGui.QPen(CR, s(1.2)))
+    p.drawLine(s(259),s(24),s(272),s(24)); p.drawLine(s(259),s(124),s(272),s(124))
+    p.setPen(QtGui.QPen(CR, s(1.5))); p.drawLine(s(269),s(24),s(269),s(124))
+    _tri(p,((s(269),s(24)),(s(265),s(34)),(s(273),s(34))),CR)
+    _tri(p,((s(269),s(124)),(s(265),s(114)),(s(273),s(114))),CR)
+    p.setPen(QtGui.QPen(CR)); p.setFont(_f(s(11),bold=True))
+    p.drawText(QtCore.QRect(s(274),s(68),s(14),s(18)),_Qt_AlignCenter,"D")
+    p.end(); return pm
+
+def _mk_h_pm():
+    pm, p, s = _pm2(280, 90)
+    CB = QtGui.QColor(144,187,216); CP = QtGui.QColor(30,93,140)
+    CW = QtGui.QColor(248,250,252); CR = QtGui.QColor(198,40,40)
+    p.setPen(QtGui.QPen(CP, s(1.5))); p.setBrush(QtGui.QBrush(CB))
+    p.drawRoundedRect(s(26),s(25),s(210),s(40),s(10),s(10))
+    for cx,cy in ((52,45),(210,45)):
+        p.setPen(_Qt_NoPen); p.setBrush(QtGui.QBrush(CP))
+        p.drawEllipse(s(cx)-s(10),s(cy)-s(10),s(20),s(20))
+        p.setBrush(QtGui.QBrush(CW)); p.drawEllipse(s(cx)-s(4),s(cy)-s(4),s(8),s(8))
+    p.setPen(QtGui.QPen(CR, s(1.2)))
+    p.drawLine(s(245),s(25),s(257),s(25)); p.drawLine(s(245),s(65),s(257),s(65))
+    p.setPen(QtGui.QPen(CR, s(1.5))); p.drawLine(s(251),s(27),s(251),s(63))
+    _tri(p,((s(251),s(25)),(s(247),s(36)),(s(255),s(36))),CR)
+    _tri(p,((s(251),s(65)),(s(247),s(54)),(s(255),s(54))),CR)
+    p.setPen(QtGui.QPen(CR)); p.setFont(_f(s(13),bold=True))
+    p.drawText(QtCore.QRect(s(260),s(39),s(16),s(18)),_Qt_AlignCenter,"H")
+    p.end(); return pm
+
+def _mk_dist_pm():
+    pm, p, s = _pm2(300, 90)
+    CB = QtGui.QColor(144,187,216); CP = QtGui.QColor(30,93,140)
+    CW = QtGui.QColor(248,250,252); CR = QtGui.QColor(198,40,40)
+    for cx,cy,ro,ri in ((55,42,28,7),(245,42,28,7)):
+        p.setPen(QtGui.QPen(CP, s(1.5))); p.setBrush(QtGui.QBrush(CB))
+        p.drawEllipse(s(cx)-s(ro),s(cy)-s(ro),s(ro*2),s(ro*2))
+        p.setPen(QtGui.QPen(CP, s(1))); p.setBrush(QtGui.QBrush(CW))
+        p.drawEllipse(s(cx)-s(ri),s(cy)-s(ri),s(ri*2),s(ri*2))
+    dp = QtGui.QPen(CP, s(2)); dp.setStyle(_Qt_DashLine); p.setPen(dp)
+    p.drawLine(s(55),s(14),s(245),s(14)); p.drawLine(s(55),s(70),s(245),s(70))
+    p.setPen(QtGui.QPen(CR, s(1.5)))
+    p.drawLine(s(55),s(82),s(245),s(82))
+    p.drawLine(s(55),s(77),s(55),s(87)); p.drawLine(s(245),s(77),s(245),s(87))
+    _tri(p,((s(55),s(82)),(s(65),s(78)),(s(65),s(86))),CR)
+    _tri(p,((s(245),s(82)),(s(235),s(78)),(s(235),s(86))),CR)
+    p.setPen(QtGui.QPen(CR)); p.setFont(_f(s(9),italic=True))
+    p.drawText(QtCore.QRect(s(100),s(73),s(100),s(12)),_Qt_AlignCenter,"distance")
+    p.end(); return pm
+
+def _mk_sym_pm():
+    pm, p, s = _pm2(300, 110)
+    CB = QtGui.QColor(144,187,216); CP = QtGui.QColor(30,93,140)
+    CR = QtGui.QColor(198,40,40);   CG = QtGui.QColor(150,150,150)
+    p.setPen(QtGui.QPen(CG)); p.setFont(_f(s(8),italic=True))
+    p.drawText(QtCore.QRect(s(32),s(2),s(80),s(11)),_Qt_AlignCenter,"symmetric")
+    p.drawText(QtCore.QRect(s(188),s(2),s(80),s(11)),_Qt_AlignCenter,"one-sided")
+    for x0 in (32, 188):
+        p.setPen(QtGui.QPen(CP, s(1.5))); p.setBrush(QtGui.QBrush(CB))
+        p.drawRect(s(x0),s(20),s(80),s(60))
+    for xz,label in ((72,"Z=0"),(188,"Z=0")):
+        dp = QtGui.QPen(CR, s(1.5)); dp.setStyle(_Qt_DashLine); p.setPen(dp)
+        p.drawLine(s(xz),s(14),s(xz),s(92))
+        p.setPen(QtGui.QPen(CR)); p.setFont(_f(s(7)))
+        p.drawText(QtCore.QRect(s(xz)-s(7),s(7),s(14),s(9)),_Qt_AlignCenter,label)
+    p.setPen(QtGui.QPen(CR, s(1.2)))
+    p.drawLine(s(32),s(88),s(112),s(88))
+    for xt in (32,72,112): p.drawLine(s(xt),s(84),s(xt),s(92))
+    _tri(p,((s(32),s(88)),(s(41),s(84)),(s(41),s(92))),CR)
+    _tri(p,((s(72),s(88)),(s(63),s(84)),(s(63),s(92))),CR)
+    _tri(p,((s(72),s(88)),(s(81),s(84)),(s(81),s(92))),CR)
+    _tri(p,((s(112),s(88)),(s(103),s(84)),(s(103),s(92))),CR)
+    p.setPen(QtGui.QPen(CR)); p.setFont(_f(s(8)))
+    p.drawText(QtCore.QRect(s(35),s(93),s(32),s(12)),_Qt_AlignCenter,"W/2")
+    p.drawText(QtCore.QRect(s(75),s(93),s(32),s(12)),_Qt_AlignCenter,"W/2")
+    p.setPen(QtGui.QPen(CR, s(1.2)))
+    p.drawLine(s(188),s(88),s(268),s(88))
+    p.drawLine(s(188),s(84),s(188),s(92)); p.drawLine(s(268),s(84),s(268),s(92))
+    _tri(p,((s(188),s(88)),(s(197),s(84)),(s(197),s(92))),CR)
+    _tri(p,((s(268),s(88)),(s(259),s(84)),(s(259),s(92))),CR)
+    p.setPen(QtGui.QPen(CR)); p.setFont(_f(s(8)))
+    p.drawText(QtCore.QRect(s(215),s(93),s(22),s(12)),_Qt_AlignCenter,"W")
+    p.end(); return pm
+
+_DIAG_PAINTER = {
+    'link': _mk_link_pm, 'wheel': _mk_wheel_pm,
+    'h':    _mk_h_pm,    'dist':  _mk_dist_pm,    'sym': _mk_sym_pm,
+}
+
+
 def _get_pm(key):
     if key not in _DIAG_CACHE:
-        svg = _DIAG_SVG.get(key)
-        if svg and _QtSvg:
-            r  = _QtSvg.QSvgRenderer(QtCore.QByteArray(svg))
-            sz = r.defaultSize()
+        if _QtSvg and key in _DIAG_SVG:
+            svg = _DIAG_SVG[key]
+            r   = _QtSvg.QSvgRenderer(QtCore.QByteArray(svg))
+            sz  = r.defaultSize()
             _DIAG_CACHE[key] = _render_svg(svg, sz.width(), sz.height())
+        elif key in _DIAG_PAINTER:
+            _DIAG_CACHE[key] = _DIAG_PAINTER[key]()
         else:
             _DIAG_CACHE[key] = None
     return _DIAG_CACHE[key]
@@ -286,15 +456,18 @@ class _SvgTip(QtWidgets.QFrame):
 
 
 def _attach_svg_tip(widget, key, w=0, h=0, caption="", tip_width=280):
-    """Attach an SVG diagram popup to widget on hover."""
-    svg = _DIAG_SVG.get(key)
-    if svg is None or _QtSvg is None:
+    """Attach a diagram popup to widget on hover."""
+    if _QtSvg and key in _DIAG_SVG:
+        svg      = _DIAG_SVG[key]
+        renderer = _QtSvg.QSvgRenderer(QtCore.QByteArray(svg))
+        sz       = renderer.defaultSize()
+        lw       = tip_width
+        lh       = int(tip_width * sz.height() / sz.width()) if sz.width() > 0 else tip_width
+        pm       = _render_svg(svg, lw, lh)
+    else:
+        pm = _get_pm(key)
+    if pm is None:
         return
-    renderer = _QtSvg.QSvgRenderer(QtCore.QByteArray(svg))
-    sz = renderer.defaultSize()
-    lw = tip_width
-    lh = int(tip_width * sz.height() / sz.width()) if sz.width() > 0 else tip_width
-    pm = _render_svg(svg, lw, lh)
     widget.setProperty("_svgtip_pm",  pm)
     widget.setProperty("_svgtip_cap", caption)
     widget.installEventFilter(_SvgTip.get())
