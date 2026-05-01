@@ -214,25 +214,6 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         wf.addRow("Hub bore ⌀:", self.spin_hub)
         wf.addRow("", self._hint("0 = solid wheel  ·  must be < D"))
 
-        self.spin_H = QtWidgets.QDoubleSpinBox()
-        self.spin_H.setRange(0.1, 9999.0); self.spin_H.setDecimals(3)
-        self.spin_H.setSuffix(" mm"); self.spin_H.setValue(8.0)
-        self.spin_H.setToolTip(
-            "Height of the chain link body (side / cross-section view).\n\n"
-            "  Side view of one link:\n"
-            "  ┌────────────────────┐\n"
-            "  │  ○            ○   │  ← H (this height)\n"
-            "  └────────────────────┘\n\n"
-            "Used to compute the minimum safe wheel diameter:\n"
-            "  R_min = pitch² / H  +  H / 4\n"
-            "  D_min = 2 × R_min\n\n"
-            "If the wheel is smaller than D_min, the rigid link bodies\n"
-            "collide with the rim at the arc-to-straight transition."
-        )
-        self.spin_H.valueChanged.connect(self._on_param_changed)
-        wf.addRow("Link body height H:", self.spin_H)
-        wf.addRow("", self._hint("height of the link body — drives minimum wheel diameter"))
-
         root.addWidget(wheel_grp)
 
         root.addWidget(self._hsep())
@@ -272,15 +253,13 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         self.lbl_n_total    = QtWidgets.QLabel("—")
         self.lbl_radius     = QtWidgets.QLabel("—")
         self.lbl_straight   = QtWidgets.QLabel("—")
-        self.lbl_min_d      = QtWidgets.QLabel("—")
 
-        cfl.addRow("Pitch:",                self.lbl_pitch)
-        cfl.addRow("N per arc:",            self.lbl_n_arc)
-        cfl.addRow("N straight per side:",  self.lbl_n_straight)
-        cfl.addRow("Total links:",          self.lbl_n_total)
-        cfl.addRow("Arc radius:",           self.lbl_radius)
+        cfl.addRow("Pitch:",                 self.lbl_pitch)
+        cfl.addRow("N per arc:",             self.lbl_n_arc)
+        cfl.addRow("N straight per side:",   self.lbl_n_straight)
+        cfl.addRow("Total links:",           self.lbl_n_total)
+        cfl.addRow("Arc radius:",            self.lbl_radius)
         cfl.addRow("Actual wheel distance:", self.lbl_straight)
-        cfl.addRow("Min wheel ⌀:",          self.lbl_min_d)
 
         root.addWidget(comp_grp)
 
@@ -418,9 +397,6 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
             return None
         return max(2, round(math.pi / (2.0 * math.asin(arg))))
 
-    def _r_min(self, pitch, H):
-        return pitch**2 / H + H / 4.0
-
     # ── computed labels ───────────────────────────────────────────────────────
 
     def _n_straight(self, p):
@@ -433,21 +409,14 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         p = self._pitch()
         if p is None:
             for lbl in (self.lbl_pitch, self.lbl_n_arc, self.lbl_n_straight,
-                        self.lbl_n_total, self.lbl_radius,
-                        self.lbl_straight, self.lbl_min_d):
+                        self.lbl_n_total, self.lbl_radius, self.lbl_straight):
                 lbl.setText("—")
             return
 
         D  = self.spin_D.value()
-        H  = self.spin_H.value()
         Ns = self._n_straight(p)
 
         self.lbl_pitch.setText("<b>{:.4f} mm</b>".format(p))
-
-        r_min = self._r_min(p, H)
-        d_min = 2.0 * r_min
-        ok_str = " ✅" if D >= d_min else " <b style='color:red'>⚠ too small</b>"
-        self.lbl_min_d.setText("<b>{:.2f} mm</b>".format(d_min) + ok_str)
 
         n = self._n_per_arc(p, D)
         if n is None:
@@ -477,11 +446,8 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
             ok = False
         else:
             D   = self.spin_D.value()
-            H   = self.spin_H.value()
             hub = self.spin_hub.value()
             if self._n_per_arc(p, D) is None:
-                ok = False
-            elif D < 2.0 * self._r_min(p, H):
                 ok = False
             elif hub >= D:
                 ok = False
