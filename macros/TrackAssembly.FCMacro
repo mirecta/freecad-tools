@@ -265,19 +265,6 @@ def _get_pm(key):
     return _DIAG_CACHE[key]
 
 
-def _diagram_row(key, *_):
-    """Return a centred QHBoxLayout with the diagram, or None."""
-    pm = _get_pm(key)
-    if pm is None:
-        return None
-    lbl = QtWidgets.QLabel()
-    lbl.setPixmap(pm)
-    lbl.setAlignment(_Qt_AlignCenter)
-    row = QtWidgets.QHBoxLayout()
-    row.addStretch(); row.addWidget(lbl); row.addStretch()
-    return row
-
-
 # ── hover-popup tooltip ───────────────────────────────────────────────────────
 
 class _SvgTip(QtWidgets.QFrame):
@@ -351,11 +338,21 @@ class _SvgTip(QtWidgets.QFrame):
         return False
 
 
-def _attach_svg_tip(widget, key, w=0, h=0, caption=""):
+def _attach_svg_tip(widget, key, w=0, h=0, caption="", tip_width=200):
     """Attach a QPainter-drawn diagram popup to widget on hover."""
     pm = _get_pm(key)
     if pm is None:
         return
+    dpr  = pm.devicePixelRatio() or 1.0
+    lw   = pm.width() / dpr          # logical width of original
+    if tip_width < lw:
+        try:
+            smooth = QtCore.Qt.TransformationMode.SmoothTransformation
+        except AttributeError:
+            smooth = QtCore.Qt.SmoothTransformation
+        phys = int(tip_width * dpr)
+        pm = pm.scaledToWidth(phys, smooth)
+        pm.setDevicePixelRatio(dpr)
     widget.setProperty("_svgtip_pm",  pm)
     widget.setProperty("_svgtip_cap", caption)
     widget.installEventFilter(_SvgTip.get())
@@ -399,9 +396,6 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         # ── joint pickers ─────────────────────────────────────────────────────
         joints_grp = QtWidgets.QGroupBox("Joint connection points")
         jv = QtWidgets.QVBoxLayout(joints_grp)
-        row = _diagram_row(_SVG_LINK, 300, 88)
-        if row:
-            jv.addLayout(row)
         jg = QtWidgets.QGridLayout()
         jg.setColumnStretch(1, 1)
 
@@ -475,9 +469,6 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         # ── wheel parameters ───────────────────────────────────────────────────
         wheel_grp = QtWidgets.QGroupBox("Wheel parameters")
         wv = QtWidgets.QVBoxLayout(wheel_grp)
-        row = _diagram_row(_SVG_WHEEL, 300, 132)
-        if row:
-            wv.addLayout(row)
         wf = QtWidgets.QFormLayout()
         wv.addLayout(wf)
 
