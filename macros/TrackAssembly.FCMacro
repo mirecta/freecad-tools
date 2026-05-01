@@ -552,7 +552,8 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         self.lbl_n_arc.setText("<b>{}</b>  links per arc".format(n))
         self.lbl_n_straight.setText("<b>{}</b>  links per side".format(Ns))
         self.lbl_n_total.setText("<b>{}</b>  links".format(N))
-        self.lbl_radius.setText("<b>{:.3f} mm</b>".format(radius))
+        self.lbl_radius.setText(
+            "<b>{:.3f} mm</b>  →  {}-gon wheel".format(radius, 2 * n))
         self.lbl_straight.setText(
             "<b>{:.3f} mm</b>  ({} × pitch)".format(s_len, Ns))
 
@@ -575,17 +576,34 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
 
     # ── wheel solid ───────────────────────────────────────────────────────────
 
-    def _make_wheel(self, D, W, hub_bore, cx, cy, cz):
-        R    = D / 2.0
-        Rb   = hub_bore / 2.0
-        base = FreeCAD.Vector(cx, cy, cz - W / 2.0)
-        axis = FreeCAD.Vector(0, 0, 1)
-        disc = Part.makeCylinder(R, W, base, axis)
+    def _make_wheel(self, n, pitch, W, hub_bore, cx, cy, cz):
+        """Regular polygon prism: 2*n sides, circumradius R, each side = pitch.
+        Vertex at -90° so the bottom face aligns with the first arc link."""
+        R      = pitch / (2.0 * math.sin(math.pi / (2.0 * n)))
+        Rb     = hub_bore / 2.0
+        n_sides = 2 * n
+
+        pts = []
+        for i in range(n_sides):
+            ang = math.radians(-90.0 + i * 360.0 / n_sides)
+            pts.append(FreeCAD.Vector(R * math.cos(ang), R * math.sin(ang), 0))
+        pts.append(pts[0])
+
+        wire  = Part.makePolygon(pts)
+        face  = Part.Face(wire)
+        prism = face.extrude(FreeCAD.Vector(0, 0, W))
+
+        mat = FreeCAD.Matrix()
+        mat.move(FreeCAD.Vector(cx, cy, cz - W / 2.0))
+        prism = prism.transformGeometry(mat)
+
         if Rb > 0.001:
             bore_base = FreeCAD.Vector(cx, cy, cz - W / 2.0 - 1.0)
-            bore = Part.makeCylinder(Rb, W + 2.0, bore_base, axis)
-            return disc.cut(bore)
-        return disc
+            bore = Part.makeCylinder(Rb, W + 2.0, bore_base,
+                                     FreeCAD.Vector(0, 0, 1))
+            prism = prism.cut(bore)
+
+        return prism
 
     # ── generate ──────────────────────────────────────────────────────────────
 
@@ -676,11 +694,11 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
             if not cb.isChecked():
                 continue
             try:
-                shape = self._make_wheel(D, W, hub, wx, 0.0, cz)
+                shape = self._make_wheel(n, p, W, hub, wx, 0.0, cz)
             except Exception as e:
                 QtWidgets.QMessageBox.critical(self, "Wheel Error", str(e))
                 return
-            label = "Wheel_{}_D{:.0f}mm".format(side, D)
+            label = "Wheel_{}_{}-gon".format(side, 2 * n)
             feat = doc.addObject("Part::Feature", label)
             feat.Shape = shape
             feat.Label = label
@@ -703,12 +721,11 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
             "  N per arc         : {}\n"
             "  Total links       : {}\n"
             "  Straight / side   : {} links  (actual {:.2f} mm)\n"
-            "  Arc radius        : {:.3f} mm\n"
-            "  Wheel diameter    : {:.3f} mm\n"
+            "  Wheel shape       : {}-gon  (circumradius {:.3f} mm)\n"
             "  Wheel width       : {:.3f} mm\n"
             "  Direction         : {}\n\n"
             "Objects created:\n{}".format(
-                p, n, N, Ns, Ns*p, radius, D, W,
+                p, n, N, Ns, Ns*p, 2*n, radius, W,
                 "Up (CCW)" if Ddir > 0 else "Down (CW)",
                 "\n".join("  • " + lbl for lbl in created)
             )
