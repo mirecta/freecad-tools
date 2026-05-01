@@ -34,67 +34,6 @@ except ImportError:
     from PySide  import QtGui as QtWidgets, QtCore
 
 
-# ── diagrams ──────────────────────────────────────────────────────────────────
-
-class _LinkDiagram(QtWidgets.QWidget):
-    """Top-down view of a chain link labelling Left Joint, Right Joint, pitch."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFixedSize(300, 86)
-
-    def paintEvent(self, _ev):
-        qp = QtGui.QPainter(self)
-        qp.setRenderHint(QtGui.QPainter.Antialiasing)
-        W, H   = self.width(), self.height()
-        FILL   = QtGui.QColor(144, 187, 216)
-        STR    = QtGui.QColor(30,  93,  140)
-        DIM    = QtGui.QColor(198, 40,   40)
-        TXT    = QtGui.QColor(50,  60,   70)
-        WH     = QtGui.QColor(248, 250,  252)
-
-        qp.fillRect(self.rect(), WH)
-
-        # body
-        pad = 28; bh = 34; bx = pad; bw = W - 2*pad; by = 18
-        qp.setBrush(FILL); qp.setPen(QtGui.QPen(STR, 2))
-        qp.drawRoundedRect(bx, by, bw, bh, 13, 13)
-
-        # joint holes
-        jr = 10; cy = by + bh // 2
-        lx = bx + jr + 8; rx = bx + bw - jr - 8
-        for jx in (lx, rx):
-            qp.setBrush(STR); qp.setPen(QtCore.Qt.NoPen)
-            qp.drawEllipse(jx - jr, cy - jr, jr*2, jr*2)
-            qp.setBrush(WH)
-            qp.drawEllipse(jx - 4,  cy - 4,  8,    8)
-
-        # labels above holes
-        font = QtGui.QFont(); font.setPointSize(8); qp.setFont(font)
-        fm = qp.fontMetrics()
-        qp.setPen(TXT)
-        for jx, txt in ((lx, "Left Joint"), (rx, "Right Joint")):
-            qp.drawText(jx - fm.width(txt)//2, by - 4, txt)
-
-        # pitch arrow below body
-        ay = by + bh + 12
-        qp.setPen(QtGui.QPen(DIM, 1.5))
-        for jx in (lx, rx):
-            qp.drawLine(jx, by + bh + 3, jx, ay - 2)
-        qp.drawLine(lx + 9, ay, rx - 9, ay)
-        for jx, sg in ((lx, 1), (rx, -1)):
-            path = QtGui.QPainterPath()
-            path.moveTo(jx, ay)
-            path.lineTo(jx + sg*9, ay - 3)
-            path.lineTo(jx + sg*9, ay + 3)
-            path.closeSubpath()
-            qp.fillPath(path, DIM)
-        qp.setPen(DIM)
-        lbl = "pitch"
-        qp.drawText((lx + rx)//2 - fm.width(lbl)//2, ay + 13, lbl)
-        qp.end()
-
-
 # ── dialog ────────────────────────────────────────────────────────────────────
 
 class TrackChainDialog(QtWidgets.QDialog):
@@ -133,39 +72,36 @@ class TrackChainDialog(QtWidgets.QDialog):
         ))
 
         # ── joint pickers ─────────────────────────────────────────────────────
+        _joint_tip = (
+            "Pick the pin hole on the {side} side of the link body.\n\n"
+            "  Top view:  [LEFT●]═══════════[●RIGHT]\n"
+            "                    ← pitch →\n\n"
+            "① Click the circular hole edge in the 3-D view (turns orange)\n"
+            "② Click this button to record the joint centre\n\n"
+            "Pitch = distance between left and right joint centres."
+        )
         joints_grp = QtWidgets.QGroupBox("Joint connection points")
-        jv = QtWidgets.QVBoxLayout(joints_grp)
-        diag_row = QtWidgets.QHBoxLayout()
-        diag_row.addStretch(); diag_row.addWidget(_LinkDiagram()); diag_row.addStretch()
-        jv.addLayout(diag_row)
-        jg = QtWidgets.QGridLayout()
+        jg = QtWidgets.QGridLayout(joints_grp)
         jg.setColumnStretch(1, 1)
 
-        self.left_icon   = QtWidgets.QLabel("○")
-        self.left_icon.setFixedWidth(20)
+        self.left_icon   = QtWidgets.QLabel("○"); self.left_icon.setFixedWidth(20)
         self.left_coords = QtWidgets.QLabel("<i>not picked</i>")
         self.btn_left    = QtWidgets.QPushButton("⬅  Pick Left Joint")
-        self.btn_left.setToolTip(
-            "① Click the LEFT hole edge in the 3-D view\n"
-            "② Click this button")
+        self.btn_left.setToolTip(_joint_tip.format(side="LEFT"))
         self.btn_left.clicked.connect(self._on_pick_left)
 
-        self.right_icon   = QtWidgets.QLabel("○")
-        self.right_icon.setFixedWidth(20)
+        self.right_icon   = QtWidgets.QLabel("○"); self.right_icon.setFixedWidth(20)
         self.right_coords = QtWidgets.QLabel("<i>not picked</i>")
         self.btn_right    = QtWidgets.QPushButton("Pick Right Joint  ➡")
-        self.btn_right.setToolTip(
-            "① Click the RIGHT hole edge in the 3-D view\n"
-            "② Click this button")
+        self.btn_right.setToolTip(_joint_tip.format(side="RIGHT"))
         self.btn_right.clicked.connect(self._on_pick_right)
 
-        jg.addWidget(self.left_icon,   0, 0)
-        jg.addWidget(self.left_coords, 0, 1)
-        jg.addWidget(self.btn_left,    0, 2)
-        jg.addWidget(self.right_icon,  1, 0)
-        jg.addWidget(self.right_coords,1, 1)
-        jg.addWidget(self.btn_right,   1, 2)
-        jv.addLayout(jg)
+        jg.addWidget(self.left_icon,    0, 0)
+        jg.addWidget(self.left_coords,  0, 1)
+        jg.addWidget(self.btn_left,     0, 2)
+        jg.addWidget(self.right_icon,   1, 0)
+        jg.addWidget(self.right_coords, 1, 1)
+        jg.addWidget(self.btn_right,    1, 2)
         root.addWidget(joints_grp)
 
         self.pitch_label = QtWidgets.QLabel("Pitch: —")
@@ -217,12 +153,28 @@ class TrackChainDialog(QtWidgets.QDialog):
         self.spin_n.setRange(4, 9998)
         self.spin_n.setSingleStep(2)
         self.spin_n.setValue(40)
+        self.spin_n.setToolTip(
+            "Total number of chain links (must be even).\n\n"
+            "  N = 2 × N_per_arc  +  2 × N_straight\n\n"
+            "Odd values are rounded down automatically.\n"
+            "Typical range: 20 – 200 links."
+        )
         self.spin_n.valueChanged.connect(self._update_max_straight)
         form.addRow("Total links  (even):", self.spin_n)
 
         self.spin_s = QtWidgets.QSpinBox()
         self.spin_s.setRange(0, 18)
         self.spin_s.setValue(8)
+        self.spin_s.setToolTip(
+            "Number of straight links on each side of the oval.\n\n"
+            "  ●──────────────●   ← N_straight links per side\n"
+            " ╱                ╲\n"
+            "│   N_per_arc each │\n"
+            " ╲                ╱\n"
+            "  ●──────────────●\n\n"
+            "0  = pure circle\n"
+            "1+ = oval; higher = longer straight sections"
+        )
         self.spin_s.valueChanged.connect(
             lambda _: self._on_wheel_diam_changed(self.spin_wheel.value()))
         form.addRow("Links per straight side:", self.spin_s)

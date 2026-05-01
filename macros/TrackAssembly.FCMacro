@@ -47,63 +47,6 @@ except ImportError:
     from PySide  import QtGui as QtWidgets, QtCore
 
 
-# ── diagram ───────────────────────────────────────────────────────────────────
-
-class _LinkDiagram(QtWidgets.QWidget):
-    """Top-down chain link: labels Left Joint, Right Joint, pitch."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFixedSize(300, 86)
-
-    def paintEvent(self, _ev):
-        qp = QtGui.QPainter(self)
-        qp.setRenderHint(QtGui.QPainter.Antialiasing)
-        W, H  = self.width(), self.height()
-        FILL  = QtGui.QColor(144, 187, 216)
-        STR   = QtGui.QColor(30,  93,  140)
-        DIM   = QtGui.QColor(198, 40,   40)
-        TXT   = QtGui.QColor(50,  60,   70)
-        WH    = QtGui.QColor(248, 250,  252)
-
-        qp.fillRect(self.rect(), WH)
-
-        pad = 28; bh = 34; bx = pad; bw = W - 2*pad; by = 18
-        qp.setBrush(FILL); qp.setPen(QtGui.QPen(STR, 2))
-        qp.drawRoundedRect(bx, by, bw, bh, 13, 13)
-
-        jr = 10; cy = by + bh // 2
-        lx = bx + jr + 8; rx = bx + bw - jr - 8
-        for jx in (lx, rx):
-            qp.setBrush(STR); qp.setPen(QtCore.Qt.NoPen)
-            qp.drawEllipse(jx - jr, cy - jr, jr*2, jr*2)
-            qp.setBrush(WH)
-            qp.drawEllipse(jx - 4, cy - 4, 8, 8)
-
-        font = QtGui.QFont(); font.setPointSize(8); qp.setFont(font)
-        fm = qp.fontMetrics()
-        qp.setPen(TXT)
-        for jx, txt in ((lx, "Left Joint"), (rx, "Right Joint")):
-            qp.drawText(jx - fm.width(txt)//2, by - 4, txt)
-
-        ay = by + bh + 12
-        qp.setPen(QtGui.QPen(DIM, 1.5))
-        for jx in (lx, rx):
-            qp.drawLine(jx, by + bh + 3, jx, ay - 2)
-        qp.drawLine(lx + 9, ay, rx - 9, ay)
-        for jx, sg in ((lx, 1), (rx, -1)):
-            path = QtGui.QPainterPath()
-            path.moveTo(jx, ay)
-            path.lineTo(jx + sg*9, ay - 3)
-            path.lineTo(jx + sg*9, ay + 3)
-            path.closeSubpath()
-            qp.fillPath(path, DIM)
-        qp.setPen(DIM)
-        lbl = "pitch"
-        qp.drawText((lx + rx)//2 - fm.width(lbl)//2, ay + 13, lbl)
-        qp.end()
-
-
 # ── dialog ────────────────────────────────────────────────────────────────────
 
 class TrackAssemblyDialog(QtWidgets.QDialog):
@@ -141,28 +84,33 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
 
         # ── joint pickers ─────────────────────────────────────────────────────
         joints_grp = QtWidgets.QGroupBox("Joint connection points")
-        jv = QtWidgets.QVBoxLayout(joints_grp)
-        diag_row = QtWidgets.QHBoxLayout()
-        diag_row.addStretch()
-        diag_row.addWidget(_LinkDiagram())
-        diag_row.addStretch()
-        jv.addLayout(diag_row)
-
-        jg = QtWidgets.QGridLayout()
+        jg = QtWidgets.QGridLayout(joints_grp)
         jg.setColumnStretch(1, 1)
 
         self.left_icon   = QtWidgets.QLabel("○"); self.left_icon.setFixedWidth(20)
         self.left_coords = QtWidgets.QLabel("<i>not picked</i>")
         self.btn_left    = QtWidgets.QPushButton("⬅  Pick Left Joint")
         self.btn_left.setToolTip(
-            "① Click the LEFT hole edge in the 3-D view\n② Click this button")
+            "The LEFT joint is the pin hole on the left side of the link\n"
+            "when the link is oriented with the long axis horizontal.\n\n"
+            "  [LEFT●]═══════════[●RIGHT]\n\n"
+            "① Click the circular hole edge in the 3-D view (turns orange)\n"
+            "② Click this button to record it\n\n"
+            "Pitch = distance between left and right joint centres."
+        )
         self.btn_left.clicked.connect(self._on_pick_left)
 
         self.right_icon   = QtWidgets.QLabel("○"); self.right_icon.setFixedWidth(20)
         self.right_coords = QtWidgets.QLabel("<i>not picked</i>")
         self.btn_right    = QtWidgets.QPushButton("Pick Right Joint  ➡")
         self.btn_right.setToolTip(
-            "① Click the RIGHT hole edge in the 3-D view\n② Click this button")
+            "The RIGHT joint is the pin hole on the right side of the link\n"
+            "when the link is oriented with the long axis horizontal.\n\n"
+            "  [LEFT●]═══════════[●RIGHT]\n\n"
+            "① Click the circular hole edge in the 3-D view (turns orange)\n"
+            "② Click this button to record it\n\n"
+            "Pitch = distance between left and right joint centres."
+        )
         self.btn_right.clicked.connect(self._on_pick_right)
 
         jg.addWidget(self.left_icon,    0, 0)
@@ -171,7 +119,6 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         jg.addWidget(self.right_icon,   1, 0)
         jg.addWidget(self.right_coords, 1, 1)
         jg.addWidget(self.btn_right,    1, 2)
-        jv.addLayout(jg)
         root.addWidget(joints_grp)
 
         root.addWidget(self._hsep())
@@ -182,6 +129,21 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         self.radio_up   = QtWidgets.QRadioButton("↑  Up   (CCW)")
         self.radio_down = QtWidgets.QRadioButton("↓  Down  (CW)")
         self.radio_up.setChecked(True)
+        dir_tip = (
+            "Up (CCW):   curved sections extend ABOVE the straight runs\n"
+            "\n"
+            "        ╭──── arc ────╮\n"
+            "        │             │\n"
+            "════════╯             ╰════════\n"
+            "\n"
+            "Down (CW):  curved sections extend BELOW the straight runs\n"
+            "\n"
+            "════════╮             ╭════════\n"
+            "        │             │\n"
+            "        ╰──── arc ────╯"
+        )
+        self.radio_up.setToolTip(dir_tip)
+        self.radio_down.setToolTip(dir_tip)
         self.radio_up.toggled.connect(self._update_dir_diagram)
         dir_lay.addWidget(self.radio_up)
         dir_lay.addWidget(self.radio_down)
@@ -204,25 +166,69 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         self.spin_D = QtWidgets.QDoubleSpinBox()
         self.spin_D.setRange(1.0, 99999.0); self.spin_D.setDecimals(3)
         self.spin_D.setSuffix(" mm"); self.spin_D.setValue(80.0)
+        self.spin_D.setToolTip(
+            "Outer diameter of the wheel.\n"
+            "The chain pin holes ride on this edge — no teeth needed.\n\n"
+            "  Front view:        Side view:\n"
+            "                     ┌──W──┐\n"
+            "     ╭───╮           │     │  ↕ D\n"
+            "    ╱  ○  ╲   D ↕   │     │\n"
+            "    ╲     ╱         └─────┘\n"
+            "     ╰───╯\n\n"
+            "Larger D  →  fewer links per arc  →  gentler curve\n"
+            "Smaller D →  more links per arc   →  tighter curve\n\n"
+            "D must be ≥ D_min (shown in Computed panel)."
+        )
         self.spin_D.valueChanged.connect(self._on_param_changed)
         wf.addRow("Wheel diameter D:", self.spin_D)
 
         self.spin_W = QtWidgets.QDoubleSpinBox()
         self.spin_W.setRange(0.1, 9999.0); self.spin_W.setDecimals(3)
         self.spin_W.setSuffix(" mm"); self.spin_W.setValue(20.0)
+        self.spin_W.setToolTip(
+            "Width of the wheel along the axle axis.\n\n"
+            "  Side view:\n"
+            "  ┌──W──┐\n"
+            "  │     │  ↕ D\n"
+            "  └─────┘\n\n"
+            "Should be equal to or greater than the chain inner width\n"
+            "so the chain rides fully on the wheel face."
+        )
         self.spin_W.valueChanged.connect(self._on_param_changed)
         wf.addRow("Wheel width W:", self.spin_W)
 
         self.spin_hub = QtWidgets.QDoubleSpinBox()
         self.spin_hub.setRange(0.0, 9999.0); self.spin_hub.setDecimals(3)
         self.spin_hub.setSuffix(" mm"); self.spin_hub.setValue(10.0)
+        self.spin_hub.setToolTip(
+            "Diameter of the central axle bore.\n\n"
+            "  Front view:\n"
+            "     ╭───╮\n"
+            "    ╱  ○  ╲   ← hub bore ⌀\n"
+            "    ╲     ╱\n"
+            "     ╰───╯\n\n"
+            "Set to 0 for a solid wheel with no bore.\n"
+            "Must be smaller than wheel diameter D."
+        )
         self.spin_hub.valueChanged.connect(self._on_param_changed)
         wf.addRow("Hub bore ⌀:", self.spin_hub)
-        wf.addRow("", self._hint("0 = solid wheel  ·  bore must be < D"))
+        wf.addRow("", self._hint("0 = solid wheel  ·  must be < D"))
 
         self.spin_H = QtWidgets.QDoubleSpinBox()
         self.spin_H.setRange(0.1, 9999.0); self.spin_H.setDecimals(3)
         self.spin_H.setSuffix(" mm"); self.spin_H.setValue(8.0)
+        self.spin_H.setToolTip(
+            "Height of the chain link body (side / cross-section view).\n\n"
+            "  Side view of one link:\n"
+            "  ┌────────────────────┐\n"
+            "  │  ○            ○   │  ← H (this height)\n"
+            "  └────────────────────┘\n\n"
+            "Used to compute the minimum safe wheel diameter:\n"
+            "  R_min = pitch² / H  +  H / 4\n"
+            "  D_min = 2 × R_min\n\n"
+            "If the wheel is smaller than D_min, the rigid link bodies\n"
+            "collide with the rim at the arc-to-straight transition."
+        )
         self.spin_H.valueChanged.connect(self._on_param_changed)
         wf.addRow("Link body height H:", self.spin_H)
         wf.addRow("", self._hint("height of the link body — drives minimum wheel diameter"))
@@ -237,6 +243,17 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
 
         self.spin_s = QtWidgets.QSpinBox()
         self.spin_s.setRange(0, 9998); self.spin_s.setValue(8)
+        self.spin_s.setToolTip(
+            "Number of straight links on each side of the oval.\n\n"
+            "  ●──────────────●   ← N_straight links per side\n"
+            " ╱                ╲\n"
+            "│   N_per_arc each │  ← computed from wheel diameter\n"
+            " ╲                ╱\n"
+            "  ●──────────────●\n\n"
+            "0  = pure circle (chain wraps around two touching wheels)\n"
+            "1+ = oval chain; higher = longer straight sections\n\n"
+            "Total links = 2 × N_per_arc + 2 × N_straight"
+        )
         self.spin_s.valueChanged.connect(self._on_param_changed)
         cf.addRow("Links per straight side:", self.spin_s)
         cf.addRow("", self._hint("0 = pure circle  ·  higher = longer oval"))
@@ -274,6 +291,15 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         self.check_chain       = QtWidgets.QCheckBox("Chain")
         self.check_wheel_left  = QtWidgets.QCheckBox("Left wheel")
         self.check_wheel_right = QtWidgets.QCheckBox("Right wheel")
+        self.check_chain.setToolTip(
+            "Generate the chain compound:\n"
+            "N copies of the selected link body placed around the oval.")
+        self.check_wheel_left.setToolTip(
+            "Generate the left wheel cylinder.\n"
+            "Placed at the left arc centre.")
+        self.check_wheel_right.setToolTip(
+            "Generate the right wheel cylinder.\n"
+            "Placed at the right arc centre.")
         for cb in (self.check_chain, self.check_wheel_left, self.check_wheel_right):
             cb.setChecked(True)
             gh.addWidget(cb)
