@@ -612,7 +612,7 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
 
         self.spin_D = QtWidgets.QDoubleSpinBox()
         self.spin_D.setRange(1.0, 99999.0); self.spin_D.setDecimals(3)
-        self.spin_D.setSuffix(" mm"); self.spin_D.setValue(80.0)
+        self.spin_D.setSuffix(" mm"); self.spin_D.setValue(25.0)
         self.spin_D.setToolTip("Outer wheel diameter  (drives N per arc)")
         _attach_svg_tip(self.spin_D, _SVG_WHEEL, 300, 132,
                         "Outer diameter D — chain rides on this edge\n"
@@ -622,7 +622,7 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
 
         self.spin_W = QtWidgets.QDoubleSpinBox()
         self.spin_W.setRange(0.1, 9999.0); self.spin_W.setDecimals(3)
-        self.spin_W.setSuffix(" mm"); self.spin_W.setValue(20.0)
+        self.spin_W.setSuffix(" mm"); self.spin_W.setValue(26.0)
         self.spin_W.setToolTip("Wheel width along axle axis  (≥ chain inner width)")
         _attach_svg_tip(self.spin_W, _SVG_WHEEL, 300, 132,
                         "Width W — should be ≥ chain inner width")
@@ -631,7 +631,7 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
 
         self.spin_hub = QtWidgets.QDoubleSpinBox()
         self.spin_hub.setRange(0.0, 9999.0); self.spin_hub.setDecimals(3)
-        self.spin_hub.setSuffix(" mm"); self.spin_hub.setValue(10.0)
+        self.spin_hub.setSuffix(" mm"); self.spin_hub.setValue(2.0)
         self.spin_hub.setToolTip("Hub bore diameter  (0 = solid, must be < D)")
         _attach_svg_tip(self.spin_hub, _SVG_WHEEL, 300, 132,
                         "Hub bore ⌀ — central axle hole\n0 = solid wheel  ·  must be < D")
@@ -641,7 +641,7 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
 
         self.spin_H = QtWidgets.QDoubleSpinBox()
         self.spin_H.setRange(0.1, 9999.0); self.spin_H.setDecimals(3)
-        self.spin_H.setSuffix(" mm"); self.spin_H.setValue(8.0)
+        self.spin_H.setSuffix(" mm"); self.spin_H.setValue(6.0)
         self.spin_H.setToolTip("Link body height  (sets polygon face depth)")
         _attach_svg_tip(self.spin_H, _SVG_H, 280, 90,
                         "Link body height H\n"
@@ -669,7 +669,7 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
 
         self.spin_dist = QtWidgets.QDoubleSpinBox()
         self.spin_dist.setRange(0.0, 999999.0); self.spin_dist.setDecimals(2)
-        self.spin_dist.setSuffix(" mm"); self.spin_dist.setValue(100.0)
+        self.spin_dist.setSuffix(" mm"); self.spin_dist.setValue(70.0)
         self.spin_dist.setToolTip("Minimum centre-to-centre wheel distance  (0 = pure circle)")
         _attach_svg_tip(self.spin_dist, _SVG_DIST, 300, 90,
                         "Minimum centre-to-centre wheel distance\n"
@@ -817,7 +817,7 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         j1, j2 = self.left_joint, self.right_joint
         if j1 is None or j2 is None:
             return None
-        return math.sqrt((j2.x-j1.x)**2 + (j2.y-j1.y)**2 + (j2.z-j1.z)**2)
+        return math.sqrt((j2.x-j1.x)**2 + (j2.y-j1.y)**2)
 
     def _n_per_arc(self, pitch, D):
         arg = pitch / D
@@ -992,7 +992,9 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
             aS = 180.0 / n
 
             def _add(tx, ty, deg):
-                shapes.append(base_shape.transformGeometry(_mat(tx, ty, deg)))
+                s = base_shape.copy()
+                s.transformShape(_mat(tx, ty, deg))
+                shapes.append(s)
 
             # bottom straight  →
             for i in range(Ns):
