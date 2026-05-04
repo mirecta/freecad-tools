@@ -693,7 +693,7 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         self.lbl_n_arc      = QtWidgets.QLabel("—")
         self.lbl_n_straight = QtWidgets.QLabel("—")
         self.lbl_n_total    = QtWidgets.QLabel("—")
-        self.lbl_radius     = QtWidgets.QLabel("—")
+        self.lbl_diameter     = QtWidgets.QLabel("—")
         self.lbl_apothem    = QtWidgets.QLabel("—")
         self.lbl_straight   = QtWidgets.QLabel("—")
 
@@ -701,7 +701,7 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         cfl.addRow("N per arc:",             self.lbl_n_arc)
         cfl.addRow("N straight per side:",   self.lbl_n_straight)
         cfl.addRow("Total links:",           self.lbl_n_total)
-        cfl.addRow("Arc radius:",            self.lbl_radius)
+        cfl.addRow("N-gon outer ⌀:",         self.lbl_diameter)
         cfl.addRow("Polygon face depth:",    self.lbl_apothem)
         cfl.addRow("Actual wheel distance:", self.lbl_straight)
 
@@ -837,7 +837,7 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         p = self._pitch()
         if p is None:
             for lbl in (self.lbl_pitch, self.lbl_n_arc, self.lbl_n_straight,
-                        self.lbl_n_total, self.lbl_radius, self.lbl_apothem,
+                        self.lbl_n_total, self.lbl_diameter, self.lbl_apothem,
                         self.lbl_straight):
                 lbl.setText("—")
             return
@@ -852,7 +852,7 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         if n is None:
             msg = "<i style='color:red'>diameter too small for this pitch</i>"
             for lbl in (self.lbl_n_arc, self.lbl_n_straight, self.lbl_n_total,
-                        self.lbl_radius, self.lbl_apothem, self.lbl_straight):
+                        self.lbl_diameter, self.lbl_apothem, self.lbl_straight):
                 lbl.setText(msg)
             return
 
@@ -860,13 +860,14 @@ class TrackAssemblyDialog(QtWidgets.QDialog):
         radius     = p / (2.0 * math.sin(math.pi / (2.0 * n)))
         half_angle = math.pi / (2 * n)
         apothem    = radius * math.cos(half_angle) - h_seg
+        R_poly     = apothem / math.cos(half_angle)
         s_len      = Ns * p
 
         self.lbl_n_arc.setText("<b>{}</b>  links per arc".format(n))
         self.lbl_n_straight.setText("<b>{}</b>  links per side".format(Ns))
         self.lbl_n_total.setText("<b>{}</b>  links".format(N))
-        self.lbl_radius.setText(
-            "<b>{:.3f} mm</b>  →  {}-gon wheel".format(radius, 2 * n))
+        self.lbl_diameter.setText(
+            "<b>{:.3f} mm</b>  →  {}-gon wheel".format(2.0 * R_poly, 2 * n))
         self.lbl_apothem.setText(
             "<b>{:.3f} mm</b>  (R·cos(π/2n) − H/2)".format(apothem))
         self.lbl_straight.setText(
