@@ -2,8 +2,10 @@
 
 A FreeCAD macro that generates a stadium-shaped (rectangle with semicircle ends)
 cable spool. A helical snap-in groove wraps the side wall; the first and last
-loops continue into ramp "corridors" that reach the bottom and top faces, where
-the user draws the connector pockets (e.g. USB-C) by hand.
+loops continue into ramp "corridors" that reach the bottom and top faces. There
+the groove keeps running round while tightening inward - the way the last turn
+of a wound cable does - so it ends up on the inside of the wall, where the user
+draws the connector pockets (e.g. USB-C) by hand.
 
 Inspired by 3D-printed cable organizers where the cable is wound around the
 body and both connectors are stored flush in the top/bottom faces.
@@ -54,8 +56,9 @@ derivation), so there are no image files to ship alongside the macro.
 | `HEIGHT` | 0 | 0 = auto from cable; >0 = fixed height, pitch adapts |
 | `END_MARGIN` | 0 | Face → centre of first/last turn; 0 = auto |
 | `RAMP_LENGTH` | 25 | Perimeter length used by the corridor to climb to a face |
-| `BEND_RADIUS` | 6 | Rounds the ramp→channel corner so the cable isn't kinked; 0 = old sharp corner |
-| `FACE_CHANNEL_LEN` | 12 | Open channel on the face, from the end of the bend inward |
+| `FACE_TURN` | 0.5 | Laps the groove runs on the face, tightening inward; 0 = stop at the wall |
+| `FACE_INSET` | 0 | How far inward it moves over that run; 0 = auto (just clears the outer wall) |
+| `SLOT_EPS` | 0.05 | Face channel oversize, keeps its walls off the swept tube |
 | `FACE_DEPTH` | 0 | Face channel depth; 0 = `d` |
 | `CONNECTOR_ALLOWANCE` | 30 | Cable+connector length per end stored in the user-drawn pocket |
 | `EDGE_FILLET` | 1.5 | Top/bottom outer edge fillet; 0 = none |
@@ -74,8 +77,10 @@ S      = (LENGTH - WIDTH)/2                  half straight length
 P      = 4*S + 2*pi*r                        centre-line perimeter per turn
 zb     = face_depth - R                      centre z of bottom face channel
 z0     = END_MARGIN or face_depth + MIN_WALL + R
-bend_len = BEND_RADIUS * pi/2               always a quarter turn (see below)
-per_end  = hypot(RAMP_LENGTH, z0-zb) + bend_len + FACE_CHANNEL_LEN + CONNECTOR_ALLOWANCE
+face_inset = FACE_INSET or (d - depth) + MIN_WALL + R
+face_run   = FACE_TURN * P                 face run, measured in u
+face_len   = sampled length of that run    (needs only r, S, P, face_inset)
+per_end  = hypot(RAMP_LENGTH, z0-zb) + face_len + CONNECTOR_ALLOWANCE
 L_spiral = CABLE_LENGTH - 2*per_end
 auto:   pitch = d + MIN_WALL; turns = L_spiral / hypot(P, pitch); H = 2*z0 + pitch*turns
 fixed:  iterate turns/pitch with H given; error if pitch < d + MIN_WALL
@@ -93,22 +98,24 @@ A circle of radius R is swept along the whole spine
 (`makePipeShell`, corrected-Frenet mode). If that fails, the fallback sweeps
 each spine edge individually and fuses them with spheres at the joints.
 
-Corner bend (`arc_ending_at`): where the ramp reaches the face it has to turn
-from the perimeter direction into the channel direction. `inward_dir` is
-perpendicular to the stadium tangent everywhere (on the caps it points at the
-cap centre, on the straights it is ±Y), so this corner is **always a quarter
-turn** and its length is known before anything is built. A horizontal arc of
-`BEND_RADIUS` is fitted tangent to both, appended to the spine wire, and swept
-together with the rest of the groove - so the cable curves through instead of
-being kinked around the groove radius. The bottom arc ends at the ramp start
-(travelling *outward*, `-inward_dir`); the top arc is the same curve with both
-tangents negated, which describes it traversed the other way.
+Face runs (`off_of`, `face_slot`): past the ramp the groove does not strike out
+for the centre - it keeps going round the stadium while easing inward by
+`face_inset` (same smoothstep the ramps use, so the join is tangent-continuous
+and there is no corner anywhere). Offsetting a stadium point toward the centre
+segment keeps the same inward direction, so the offset path is just the same
+stadium at a shrinking radius.
 
-Face channels (`face_channel`): start where the bend ends, and run inward along
-the bend's exit direction (handed in, not re-derived, so the two meet without a
-kink). Built from a horizontal cylinder, end spheres,
-vertical cylinders and a rotated box → open U-slot. Anchors = channel end at
-the face (z = 0 / H).
+The swept tube **stops** where the ramp reaches the face; the face run itself is
+a prismatic channel - a ribbon of width `d` around the path, extruded through
+the face. Keeping the two apart is deliberate: when the tube ran alongside the
+slot for the whole run their surfaces were tangent, and the kernel answered that
+with a *larger* volume than it started with and a sealed void inside the part.
+The channel is `SLOT_EPS` oversize and overlaps the end of the tube, so there
+the tube sits strictly inside it - a clean crossing instead of a tangency - and
+it is built in overlapping chunks and fused, because as a single polygon the
+ribbon self-intersects once the run laps back over itself.
+
+Anchors = the inner end of each face run, on the face (z = 0 / H).
 
 Body: stadium wire → face → extrude, fillet top/bottom edges, then cut the
 groove, then each face channel as a single fused tool (see Known issues for why
@@ -125,9 +132,13 @@ comes back valid, since it can quietly wreck the solid.
 ## Known issues / TODO
 
 - [x] ~~Face channel meets the ramp with a sharp 90° turn in plan view.~~
-      Fixed: `BEND_RADIUS` (default 6 mm) fits a tangent quarter-turn arc into
-      the spine between ramp and channel. Validated so the channel can't run
-      out through the far wall (it silently ate the whole part before).
+      Fixed twice: first by rounding the corner with a `BEND_RADIUS` arc, then
+      properly by dropping the corner altogether - the groove now continues
+      round the face and tightens inward, as on the commercial winders this is
+      modelled on. `FACE_TURN`/`FACE_INSET` replace `BEND_RADIUS` and
+      `FACE_CHANNEL_LEN`. Guarded so a run that laps back over itself, or one
+      inset deeper than the spool allows, fails with a message instead of
+      quietly eating the part.
 - [x] ~~Test in FreeCAD; verify sweep validity and boolean speed for long cables.~~
       Fixed: a BSpline-interpolated spine made `makePipeShell` raise
       `BRepOffsetAPI_MakePipeShell::MakeSolid` on this OCC build (reproduced
@@ -144,13 +155,14 @@ comes back valid, since it can quietly wreck the solid.
 - [ ] Re-running creates duplicate objects – add cleanup/update of existing objects.
 - [ ] Cancelling the dialog raises `Cancelled` (shows as an error in the Report view) –
       handle it gracefully.
-- [ ] Validate that `FACE_CHANNEL_LEN` plus the pocket fit on the face (warns only).
+- [ ] Validate that the face run plus the pocket you draw actually fit on the
+      face (the run itself is checked, the pocket is not).
 - [ ] The dialog diagrams cover every parameter except `FACE_DEPTH`,
       `EDGE_FILLET`, `END_MARGIN` and `SAMPLE_STEP`, which are file constants
       rather than dialog fields.
 - [ ] Meshing the result (`MeshPart`/`tessellate`) reports a non-closed,
       self-intersecting mesh even though the BRep is a valid closed single
-      solid. Pre-existing (same with `BEND_RADIUS = 0`); check before relying on
+      solid. Pre-existing (same with `FACE_TURN = 0`); check before relying on
       a direct STL export for printing.
 - [ ] Headless test script (`FreeCADCmd`) that builds several parameter sets and
       checks `shape.isValid()`, volume and bounding box.
