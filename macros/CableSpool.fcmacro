@@ -35,7 +35,9 @@ HEIGHT              = 0.0     # 0 = auto from cable length
 
 END_MARGIN          = 0.0     # face -> centre of first/last turn, 0 = auto
 RAMP_LENGTH         = 25.0    # length along perimeter used to climb to face
-FACE_CHANNEL_LEN    = 12.0    # open channel on face, from edge inward
+BEND_RADIUS         = 6.0     # smooths the ramp -> face-channel corner so the
+                              # cable isn't kinked there; 0 = old sharp corner
+FACE_CHANNEL_LEN    = 12.0    # open channel on face, from the bend inward
 FACE_DEPTH          = 0.0     # depth of face channel, 0 = groove diameter
 CONNECTOR_ALLOWANCE = 30.0    # cable+connector length (per end) that sits in
                               # the pocket YOU will draw after the channel
@@ -69,6 +71,7 @@ DIALOG_FIELDS = [
     ("HEIGHT",              "Spool height (0 = auto)",      0, 500,     1, 1,   " mm"),
     ("MIN_WALL",            "Wall between turns",           0.4, 10,    2, 0.1, " mm"),
     ("RAMP_LENGTH",         "Corridor ramp length",         5, 200,     1, 1,   " mm"),
+    ("BEND_RADIUS",         "Corner bend radius (0 = sharp)", 0, 100,   1, 0.5, " mm"),
     ("FACE_CHANNEL_LEN",    "Face channel length",          0.5, 200,   1, 1,   " mm"),
     ("CONNECTOR_ALLOWANCE", "Cable+connector in pocket (per end)", 0, 200, 1, 1, " mm"),
 ]
@@ -145,7 +148,11 @@ if RAMP_LENGTH > 0.8 * P:
     raise ValueError("RAMP_LENGTH too long for this perimeter")
 
 ramp3d = math.hypot(RAMP_LENGTH, z0 - zb)
-per_end = ramp3d + FACE_CHANNEL_LEN + CONNECTOR_ALLOWANCE
+# inward_dir is perpendicular to the stadium tangent everywhere (on the caps it
+# points at the cap centre, on the straights it is +-Y), so the ramp -> channel
+# corner is always a quarter turn and the bend length is known up front.
+bend_len = BEND_RADIUS * math.pi / 2.0
+per_end = ramp3d + bend_len + FACE_CHANNEL_LEN + CONNECTOR_ALLOWANCE
 L_spiral = CABLE_LENGTH - 2.0 * per_end
 if L_spiral <= P:
     raise ValueError("Cable too short for this spool size")
@@ -282,13 +289,48 @@ def split_u(ua, ub, step):
     return out
 
 
-def centre_line():
+def centre_line(head=None, tail=None):
     us = (split_u(-RAMP_LENGTH, 0.0, SAMPLE_STEP)[:-1]
           + split_u(0.0, u_end, None)[:-1]
           + split_u(u_end, u_end + RAMP_LENGTH, SAMPLE_STEP))
     edges = [path_edge(us[i], us[i + 1]) for i in range(len(us) - 1)
              if us[i + 1] - us[i] > 1e-7]
+    if head is not None:
+        edges.insert(0, head)
+    if tail is not None:
+        edges.append(tail)
     return Part.Wire(edges)
+
+
+def arc_ending_at(pe, t_end, t_start, radius):
+    """Horizontal circular arc of `radius` that ends at point `pe` travelling in
+    direction `t_end`, and starts somewhere with direction `t_start` (both unit,
+    both horizontal).  Returns (edge start->end, start point, arc length).
+
+    This is the blend that keeps the cable from being kinked where the ramp
+    turns into the face channel: without it the two meet at a hard corner whose
+    effective bend radius is only R (the groove radius)."""
+    if radius <= 1e-6:
+        return None, pe, 0.0
+    cross = t_start[0] * t_end[1] - t_start[1] * t_end[0]
+    dot = t_start[0] * t_end[0] + t_start[1] * t_end[1]
+    theta = math.atan2(cross, dot)          # signed turn from t_start to t_end
+    if abs(theta) < 1e-4:                   # already aligned, no bend needed
+        return None, pe, 0.0
+    # centre is 90 deg off the end tangent, on the side we are turning towards
+    n = (-t_end[1], t_end[0]) if theta > 0 else (t_end[1], -t_end[0])
+    cx, cy = pe.x + radius * n[0], pe.y + radius * n[1]
+
+    def rot(vx, vy, a):
+        ca, sa = math.cos(a), math.sin(a)
+        return vx * ca - vy * sa, vx * sa + vy * ca
+
+    ex, ey = pe.x - cx, pe.y - cy
+    sx, sy = rot(ex, ey, -theta)
+    mx, my = rot(ex, ey, -0.5 * theta)
+    p_start = V(cx + sx, cy + sy, pe.z)
+    p_mid = V(cx + mx, cy + my, pe.z)
+    return Part.Arc(p_start, p_mid, pe).toShape(), p_start, radius * abs(theta)
 
 
 def sweep_circle(spine):
@@ -314,10 +356,10 @@ def sweep_circle(spine):
     return parts[0].fuse(parts[1:])
 
 
-def face_channel(bx, by, zc, top):
-    """open U-channel on a face, from (bx,by) inward."""
-    dx, dy = inward_dir(bx, by)
-    ln = FACE_CHANNEL_LEN
+def face_channel(bx, by, zc, top, dx, dy, ln):
+    """open U-channel on a face, from (bx,by) along (dx,dy) for `ln` mm.
+    The direction is handed in (not re-derived from the position) so it matches
+    the bend arc's tangent exactly and the two join without a kink."""
     cx, cy = bx + dx * ln, by + dy * ln
     ext = H - zc + 1.0 if top else zc + 1.0      # to beyond the face
     zlo = zc if top else -1.0
@@ -364,16 +406,58 @@ def make_body():
 # ---------------------------------------------------------------- build
 doc = App.ActiveDocument or App.newDocument("CableSpool")
 
-spine = centre_line()
+u_bot, u_top = -RAMP_LENGTH, u_end + RAMP_LENGTH
+p_bot, p_top = path_point(u_bot), path_point(u_top)
+t_bot = stadium_xy(u_bot)[2:]            # ramp tangent where the cable leaves
+t_top = stadium_xy(u_top)[2:]
+d_bot = inward_dir(p_bot.x, p_bot.y)     # direction the face channel runs
+d_top = inward_dir(p_top.x, p_top.y)
+
+# Bottom: the arc ENDS at p_bot heading into the ramp. Walking the cable from
+# the anchor towards the ramp means running OUTWARD, i.e. -d_bot - feeding
+# +d_bot here puts the arc (and the channel hanging off it) outside the body.
+# Top is the same arc mirrored: negating both tangents describes the identical
+# curve traversed the other way, i.e. one that leaves p_top along the ramp
+# tangent and arrives at the channel along d_top.
+# (No need to flip the edge - Part.Wire orients edges by connectivity.)
+bend_bot, c_bot, len_bot = arc_ending_at(
+    p_bot, t_bot, (-d_bot[0], -d_bot[1]), BEND_RADIUS)
+bend_top, c_top, len_top = arc_ending_at(
+    p_top, (-t_top[0], -t_top[1]), (-d_top[0], -d_top[1]), BEND_RADIUS)
+
+if abs(max(len_bot, len_top) - bend_len) > 0.05 * max(bend_len, 1.0):
+    warn("bend is not a quarter turn (%.1f/%.1f mm) - the cable length "
+         "estimate is off by that much" % (len_bot, bend_len))
+
+
+def dist_from_axis(x, y):
+    """distance from the stadium's centre segment - <= WIDTH/2 is inside"""
+    return math.hypot(x - max(-S, min(S, x)), y)
+
+
+# The bend pushes the channel further in than FACE_CHANNEL_LEN alone suggests.
+# Unchecked it can shoot past the centre and back out through the far wall,
+# where the channel's face-opening cut then eats the whole part.
+for tag, c, dirn in (("bottom", c_bot, d_bot), ("top", c_top, d_top)):
+    reach = dist_from_axis(c.x + dirn[0] * FACE_CHANNEL_LEN,
+                           c.y + dirn[1] * FACE_CHANNEL_LEN)
+    if reach > WIDTH / 2.0 - R:
+        raise ValueError(
+            "%s channel leaves the body (ends %.1f mm from the axis, limit "
+            "%.1f) - lower BEND_RADIUS (%.1f) or FACE_CHANNEL_LEN (%.1f)"
+            % (tag, reach, WIDTH / 2.0 - R, BEND_RADIUS, FACE_CHANNEL_LEN))
+if FACE_CHANNEL_LEN > r - R:
+    warn("FACE_CHANNEL_LEN is long - channels may cross the centre")
+
+spine = centre_line(head=bend_bot, tail=bend_top)
 log("sweeping groove (%d edges, %.0f mm centre-line) ..."
     % (len(spine.Edges), spine.Length))
 groove = sweep_circle(spine)
 
-p_bot, p_top = path_point(-RAMP_LENGTH), path_point(u_end + RAMP_LENGTH)
-bot_shapes, anchor_bot = face_channel(p_bot.x, p_bot.y, zb, top=False)
-top_shapes, anchor_top = face_channel(p_top.x, p_top.y, zt, top=True)
-if FACE_CHANNEL_LEN > r - R:
-    warn("FACE_CHANNEL_LEN is long - channels may cross the centre")
+bot_shapes, anchor_bot = face_channel(c_bot.x, c_bot.y, zb, False,
+                                      d_bot[0], d_bot[1], FACE_CHANNEL_LEN)
+top_shapes, anchor_top = face_channel(c_top.x, c_top.y, zt, True,
+                                      d_top[0], d_top[1], FACE_CHANNEL_LEN)
 
 log("boolean cut ...")
 # Cut sequentially (groove, then channels). Fusing all tools first, or cutting
@@ -381,10 +465,26 @@ log("boolean cut ...")
 # the groove and channel shapes touch each other near the ramps; one cut at a
 # time keeps every intermediate result a single valid solid.
 spool = make_body().cut(groove)
-for ch in bot_shapes + top_shapes:
-    spool = spool.cut(ch)
+for shapes in (bot_shapes, top_shapes):
+    # fuse each channel's primitives into one tool first: cutting them one by
+    # one makes the kernel stumble where they overlap (it even handed back a
+    # bigger volume than it started with), fusing all tools at once splits the
+    # result - one clean tool per channel is what holds.
+    tool = shapes[0].fuse(shapes[1:])
+    try:
+        tool = tool.removeSplitter()
+    except Exception:
+        pass
+    spool = spool.cut(tool)
 try:
-    spool = spool.removeSplitter()
+    # .copy() matters: removeSplitter damages the shape it is called on even
+    # when its return value is thrown away, so refining in place would leave us
+    # with the broken solid we are trying to reject.
+    refined = spool.copy().removeSplitter()
+    if refined.isValid() and len(refined.Solids) == len(spool.Solids):
+        spool = refined
+    else:
+        warn("removeSplitter would have invalidated the shape - kept unrefined")
 except Exception:
     pass
 if not spool.isValid():
@@ -425,7 +525,18 @@ except Exception:
 log("DONE  size %.1f x %.1f x %.1f mm" % (LENGTH, WIDTH, H))
 log("groove Ø%.2f, centre radius %.2f, turns %.2f, pitch %.2f"
     % (d, r, turns, pitch))
-log("spiral cable %.0f mm + 2 x %.0f mm (ramp+channel+pocket) = %.0f mm"
+# What you actually see on the outside: with GROOVE_DEPTH_FAC > 0.5 the groove
+# is undercut, so its opening is narrower than Ø d and the rib between turns
+# looks wider than MIN_WALL (MIN_WALL is the real minimum, below the surface).
+open_w = 2.0 * math.sqrt(max(R * R - (depth - R) ** 2, 0.0))
+log("surface opening %.2f mm, visible rib %.2f mm (true min wall %.2f mm)"
+    % (open_w, pitch - open_w, MIN_WALL))
+if pitch - open_w > 1.6 * MIN_WALL:
+    log("   -> lower GROOVE_DEPTH_FAC (now %.2f) for a wider opening / "
+        "tighter looking coils" % GROOVE_DEPTH_FAC)
+log("corner bend radius %.1f mm (quarter turn %.1f mm) + %.1f mm straight "
+    "channel" % (BEND_RADIUS, len_bot, FACE_CHANNEL_LEN))
+log("spiral cable %.0f mm + 2 x %.0f mm (ramp+bend+channel+pocket) = %.0f mm"
     % (L_spiral, per_end, CABLE_LENGTH))
 log("pocket anchors: bottom (%.1f, %.1f, 0)  top (%.1f, %.1f, %.1f)"
     % (anchor_bot.x, anchor_bot.y, anchor_top.x, anchor_top.y, H))
