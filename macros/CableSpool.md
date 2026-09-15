@@ -20,6 +20,11 @@ body and both connectors are stored flush in the top/bottom faces.
 1. Copy `CableSpool.FCMacro` to your FreeCAD macro folder
    (Macro → Macros… shows the path) or open it directly.
 2. Run it. A dialog asks for the parameters (values are remembered between runs).
+   Clicking a field draws what that parameter means, to scale, from the values
+   currently in the dialog - a wall cross-section (cable, clearance, groove
+   depth, wall/pitch), a top view (outline, ramp, corner bend, face channel,
+   pocket) or a side view (height, end margin, turns). A line under the drawing
+   shows the resulting groove Ø, pitch, turn count and height before you build.
 3. The macro creates:
    - `CableSpool` – PartDesign Body whose BaseFeature is the generated shape
    - `CableSpool_Base` – the generated Part shape (inside the Body)
@@ -31,7 +36,9 @@ body and both connectors are stored flush in the top/bottom faces.
    anchor coordinates.
 
 Set `USE_DIALOG = False` to use only the constants at the top of the file
-(also the behaviour when FreeCAD runs without a GUI).
+(also the behaviour when FreeCAD runs without a GUI). The drawings are painted
+with QPainter from the live values (`preview_geometry` repeats the macro's own
+derivation), so there are no image files to ship alongside the macro.
 
 ## Parameters (mm)
 
@@ -138,6 +145,9 @@ comes back valid, since it can quietly wreck the solid.
 - [ ] Cancelling the dialog raises `Cancelled` (shows as an error in the Report view) –
       handle it gracefully.
 - [ ] Validate that `FACE_CHANNEL_LEN` plus the pocket fit on the face (warns only).
+- [ ] The dialog diagrams cover every parameter except `FACE_DEPTH`,
+      `EDGE_FILLET`, `END_MARGIN` and `SAMPLE_STEP`, which are file constants
+      rather than dialog fields.
 - [ ] Meshing the result (`MeshPart`/`tessellate`) reports a non-closed,
       self-intersecting mesh even though the BRep is a valid closed single
       solid. Pre-existing (same with `BEND_RADIUS = 0`); check before relying on

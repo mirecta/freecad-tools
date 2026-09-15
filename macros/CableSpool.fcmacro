@@ -76,28 +76,472 @@ DIALOG_FIELDS = [
     ("CONNECTOR_ALLOWANCE", "Cable+connector in pocket (per end)", 0, 200, 1, 1, " mm"),
 ]
 
+# which of the three schematics explains which parameter
+DIAGRAM_VIEW = {
+    "CABLE_DIAMETER": "section", "CLEARANCE": "section",
+    "GROOVE_DEPTH_FAC": "section", "MIN_WALL": "section",
+    "WIDTH": "plan", "LENGTH": "plan", "RAMP_LENGTH": "plan",
+    "BEND_RADIUS": "plan", "FACE_CHANNEL_LEN": "plan",
+    "CONNECTOR_ALLOWANCE": "plan",
+    "CABLE_LENGTH": "side", "HEIGHT": "side",
+}
+
 
 class Cancelled(Exception):
     pass
 
 
-def ask_values():
+def qt_modules():
     try:
-        from PySide6 import QtWidgets
+        from PySide6 import QtWidgets, QtGui, QtCore
     except ImportError:
         try:
-            from PySide2 import QtWidgets
+            from PySide2 import QtWidgets, QtGui, QtCore
         except ImportError:
-            from PySide import QtGui as QtWidgets
+            from PySide import QtGui, QtCore
+            QtWidgets = QtGui
+    return QtWidgets, QtGui, QtCore
+
+
+def qt_enum(owner, name, scope):
+    """PySide6 nests enums in a scope class, older bindings expose them flat"""
+    v = getattr(owner, name, None)
+    if v is None:
+        v = getattr(getattr(owner, scope), name)
+    return v
+
+
+def preview_geometry(v):
+    """The macro's own derivation, run on whatever is in the dialog right now,
+    so the diagrams and the computed line show what you are about to build.
+    Returns None while the numbers are still inconsistent."""
+    try:
+        d = v["CABLE_DIAMETER"] + v["CLEARANCE"]
+        R = d / 2.0
+        depth = v["GROOVE_DEPTH_FAC"] * d
+        r = v["WIDTH"] / 2.0 - depth + R
+        S = max(0.0, (v["LENGTH"] - v["WIDTH"]) / 2.0)
+        P = 4.0 * S + 2.0 * math.pi * r
+        if r <= R or P <= 0.0:
+            return None
+        face_depth = FACE_DEPTH if FACE_DEPTH > 0 else d
+        zb = face_depth - R
+        z0 = END_MARGIN if END_MARGIN > 0 else face_depth + v["MIN_WALL"] + R
+        pitch = d + v["MIN_WALL"]
+        per_end = (math.hypot(v["RAMP_LENGTH"], z0 - zb)
+                   + v["BEND_RADIUS"] * math.pi / 2.0
+                   + v["FACE_CHANNEL_LEN"] + v["CONNECTOR_ALLOWANCE"])
+        if v["HEIGHT"] > 0:
+            H = v["HEIGHT"]
+            turns = max(0.0, (H - 2.0 * z0) / pitch)
+        else:
+            turns = max(0.0, (v["CABLE_LENGTH"] - 2.0 * per_end)
+                        / math.hypot(P, pitch))
+            H = 2.0 * z0 + pitch * turns
+        return dict(d=d, R=R, depth=depth, r=r, S=S, P=P, pitch=pitch,
+                    z0=z0, zb=zb, turns=turns, H=H, per_end=per_end,
+                    open_w=2.0 * math.sqrt(max(R * R - (depth - R) ** 2, 0.0)))
+    except Exception:
+        return None
+
+
+def ask_values():
+    QtWidgets, QtGui, QtCore = qt_modules()
     import FreeCADGui
+
+    Qt = QtCore.Qt
+    AA = qt_enum(QtGui.QPainter, "Antialiasing", "RenderHint")
+    ALIGN_C = qt_enum(Qt, "AlignCenter", "AlignmentFlag")
+    DASH = qt_enum(Qt, "DashLine", "PenStyle")
+    NO_PEN = qt_enum(Qt, "NoPen", "PenStyle")
+    NO_BRUSH = qt_enum(Qt, "NoBrush", "BrushStyle")
+    FOCUS_IN = qt_enum(QtCore.QEvent, "FocusIn", "Type")
+    ROUND_CAP = qt_enum(Qt, "RoundCap", "PenCapStyle")
+    PT = QtCore.QPointF
+
+    class Diagram(QtWidgets.QWidget):
+        """Schematic of the parameter under the cursor, drawn to scale from the
+        values currently in the dialog."""
+
+        def __init__(self, values, parent=None):
+            QtWidgets.QWidget.__init__(self, parent)
+            self.values = values
+            self.key = "WIDTH"
+            self.setMinimumSize(430, 330)
+
+        def set_key(self, key):
+            if key != self.key:
+                self.key = key
+                self.update()
+
+        # ---- painting helpers ----
+        def _colours(self):
+            pal = self.palette()
+            ink = pal.color(qt_enum(QtGui.QPalette, "WindowText", "ColorRole"))
+            hot = QtGui.QColor(226, 78, 42)
+            if ink.lightness() < 128:          # light theme
+                hot = QtGui.QColor(198, 52, 20)
+            faint = QtGui.QColor(ink)
+            faint.setAlpha(90)
+            fill = QtGui.QColor(ink)
+            fill.setAlpha(38)
+            return ink, hot, faint, fill
+
+        def _pen(self, col, w=1.4, style=None):
+            p = QtGui.QPen(col)
+            p.setWidthF(w)
+            p.setCapStyle(ROUND_CAP)
+            if style is not None:
+                p.setStyle(style)
+            return p
+
+        def _text(self, p, x, y, s, col):
+            f = p.font()
+            f.setPointSizeF(max(7.0, self.font().pointSizeF() * 0.82))
+            p.setFont(f)
+            fm = QtGui.QFontMetricsF(f)
+            w = (fm.horizontalAdvance(s) if hasattr(fm, "horizontalAdvance")
+                 else fm.width(s))
+            h = fm.height()
+            bg = QtGui.QColor(self.palette().color(
+                qt_enum(QtGui.QPalette, "Window", "ColorRole")))
+            bg.setAlpha(205)
+            rect = QtCore.QRectF(x - w / 2.0 - 2, y - h / 2.0, w + 4, h)
+            p.setPen(NO_PEN)
+            p.setBrush(bg)
+            p.drawRect(rect)
+            p.setBrush(NO_BRUSH)
+            p.setPen(col)
+            p.drawText(rect, ALIGN_C, s)
+
+        def _arrow(self, p, tip, frm, size=5.0):
+            dx, dy = tip.x() - frm.x(), tip.y() - frm.y()
+            L = math.hypot(dx, dy)
+            if L < 1e-6:
+                return
+            ux, uy = dx / L, dy / L
+            for s in (1.0, -1.0):
+                p.drawLine(tip, PT(tip.x() - ux * size - s * uy * size * 0.45,
+                                   tip.y() - uy * size + s * ux * size * 0.45))
+
+        def _dim(self, p, a, b, label, hot, off=12.0):
+            """arrowed dimension line a->b, label offset perpendicular"""
+            ink, hotc, faint, _ = self._colours()
+            col = hotc if hot else faint
+            dx, dy = b.x() - a.x(), b.y() - a.y()
+            L = math.hypot(dx, dy)
+            if L < 1e-6:
+                return
+            nx, ny = -dy / L, dx / L
+            a2 = PT(a.x() + nx * off, a.y() + ny * off)
+            b2 = PT(b.x() + nx * off, b.y() + ny * off)
+            p.setPen(self._pen(col, 1.6 if hot else 1.0))
+            p.drawLine(a2, b2)
+            p.drawLine(a, a2)
+            p.drawLine(b, b2)
+            self._arrow(p, a2, b2)
+            self._arrow(p, b2, a2)
+            self._text(p, (a2.x() + b2.x()) / 2.0 + nx * 9,
+                       (a2.y() + b2.y()) / 2.0 + ny * 9, label, col)
+
+        # ---- the three schematics ----
+        def paintEvent(self, ev):
+            p = QtGui.QPainter(self)
+            try:
+                p.setRenderHint(AA, True)
+                geo = preview_geometry(self.values())
+                view = DIAGRAM_VIEW.get(self.key, "plan")
+                box = QtCore.QRectF(10, 8, self.width() - 20,
+                                    self.height() - 44)
+                if geo is None:
+                    self._text(p, self.width() / 2.0, self.height() / 2.0,
+                               "check the values", self._colours()[1])
+                    return
+                if view == "section":
+                    self._section(p, box, geo)
+                elif view == "plan":
+                    self._plan(p, box, geo)
+                else:
+                    self._side(p, box, geo)
+                ink, hot, faint, _ = self._colours()
+                self._text(p, self.width() / 2.0, self.height() - 14,
+                           u"⌀%.2f groove · pitch %.2f · "
+                           u"%.1f turns · height %.1f mm"
+                           % (geo["d"], geo["pitch"], geo["turns"], geo["H"]),
+                           ink)
+            except Exception:
+                pass
+            finally:
+                p.end()
+
+        def _section(self, p, box, g):
+            """wall cross-section: three turns of the snap-in groove"""
+            ink, hot, faint, fill = self._colours()
+            v = self.values()
+            d, R, depth, pitch = g["d"], g["R"], g["depth"], g["pitch"]
+            slab = depth + 4.0                      # wall thickness we show
+            sc = min(box.width() * 0.42 / slab,
+                     box.height() / (2.0 * pitch + d + 3.0))
+            surf = box.left() + box.width() * 0.60  # the outer surface
+            x_in = surf - slab * sc                 # back of the shown slab
+            cy = box.center().y()
+            k = self.key
+
+            # material with the grooves taken out -> the undercut lips are real
+            mat = QtGui.QPainterPath()
+            mat.addRect(QtCore.QRectF(x_in, box.top(), surf - x_in,
+                                      box.height()))
+            centres = []
+            for i in (-1, 0, 1):
+                c = PT(surf - (depth - R) * sc, cy + i * pitch * sc)
+                centres.append(c)
+                hole = QtGui.QPainterPath()
+                hole.addEllipse(c, R * sc, R * sc)
+                mat = mat.subtracted(hole)
+            p.setPen(self._pen(ink, 1.6))
+            p.setBrush(fill)
+            p.drawPath(mat)
+            p.setBrush(NO_BRUSH)
+
+            # the cable itself, so the clearance is visible as the gap
+            cable = v["CABLE_DIAMETER"] / 2.0 * sc
+            p.setPen(self._pen(hot if k in ("CABLE_DIAMETER", "CLEARANCE")
+                               else faint, 1.3, DASH))
+            p.drawEllipse(centres[1], cable, cable)
+
+            # groove diameter, straight across the middle groove
+            self._dim(p, PT(centres[1].x() - R * sc, centres[1].y()),
+                      PT(centres[1].x() + R * sc, centres[1].y()),
+                      u"\u2300 %.2f" % d,
+                      k in ("CABLE_DIAMETER", "CLEARANCE"), off=0.0)
+            if k == "CLEARANCE":
+                self._text(p, centres[1].x(), centres[1].y() + cable + 11,
+                           "cable %.2f + %.2f clearance"
+                           % (v["CABLE_DIAMETER"], v["CLEARANCE"]), hot)
+
+            # depth: surface -> bottom of the groove, at the groove's own height
+            self._dim(p, PT(surf, centres[0].y()),
+                      PT(centres[0].x() - R * sc, centres[0].y()),
+                      "depth %.2f" % depth, k == "GROOVE_DEPTH_FAC", off=16.0)
+
+            # pitch on the inside, wall thickness out in the open air
+            self._dim(p, centres[0], centres[1], "pitch %.2f" % pitch,
+                      k == "MIN_WALL",
+                      off=(centres[0].x() - x_in) + 24.0)
+            self._dim(p, PT(centres[1].x(), centres[1].y() + R * sc),
+                      PT(centres[2].x(), centres[2].y() - R * sc),
+                      "wall %.2f" % (pitch - d), k == "MIN_WALL",
+                      off=-((surf - centres[1].x()) + 30.0))
+
+            # how wide the groove actually opens at the surface
+            half = math.sqrt(max(R * R - (depth - R) ** 2, 0.0)) * sc
+            lip = k == "GROOVE_DEPTH_FAC"
+            p.setPen(self._pen(hot if lip else faint, 3.0))
+            p.drawLine(PT(surf, centres[2].y() - half),
+                       PT(surf, centres[2].y() + half))
+            self._text(p, surf + 46, centres[2].y(),
+                       "opening %.2f" % g["open_w"], hot if lip else faint)
+            self._text(p, (x_in + surf) / 2.0, box.top() + 9, "wall", faint)
+            self._text(p, surf + 40, box.bottom() - 8, "outside", faint)
+
+        def _plan(self, p, box, g):
+            """top view: outline, and the ramp -> bend -> channel end detail"""
+            ink, hot, faint, fill = self._colours()
+            v = self.values()
+            hw, S, r = v["WIDTH"] / 2.0, g["S"], g["r"]
+            half_len = S + hw
+            sc = min(box.width() / (2.0 * half_len + 26.0),
+                     box.height() / (2.0 * hw + 30.0))
+            cx, cy = box.center().x(), box.center().y()
+
+            def to_px(x, y):
+                return PT(cx + x * sc, cy - y * sc)
+
+            body = QtGui.QPainterPath()
+            body.addRoundedRect(
+                QtCore.QRectF(cx - half_len * sc, cy - hw * sc,
+                              2.0 * half_len * sc, 2.0 * hw * sc),
+                hw * sc, hw * sc)
+            p.setPen(self._pen(ink, 1.6))
+            p.setBrush(fill)
+            p.drawPath(body)
+            p.setBrush(NO_BRUSH)
+
+            P = g["P"]
+
+            def stad(u):
+                """centre-line point + unit tangent, same parametrisation as
+                the macro's stadium_xy"""
+                u = u % P
+                if u < S:
+                    return u, -r, 1.0, 0.0
+                u -= S
+                if u < math.pi * r:
+                    t = -math.pi / 2 + u / r
+                    return (S + r * math.cos(t), r * math.sin(t),
+                            -math.sin(t), math.cos(t))
+                u -= math.pi * r
+                if u < 2 * S:
+                    return S - u, r, -1.0, 0.0
+                u -= 2 * S
+                if u < math.pi * r:
+                    t = math.pi / 2 + u / r
+                    return (-S + r * math.cos(t), r * math.sin(t),
+                            -math.sin(t), math.cos(t))
+                return -S + (u - math.pi * r), -r, 1.0, 0.0
+
+            # groove centre-line
+            path = QtGui.QPainterPath()
+            n = 160
+            for i in range(n + 1):
+                x, y, _, _ = stad(P * i / n)
+                pt = to_px(x, y)
+                path.moveTo(pt) if i == 0 else path.lineTo(pt)
+            p.setPen(self._pen(faint, 1.0, DASH))
+            p.drawPath(path)
+
+            k = self.key
+            ramp = v["RAMP_LENGTH"]
+            # ramp run
+            rp = QtGui.QPainterPath()
+            for i in range(41):
+                x, y, _, _ = stad(-ramp + ramp * i / 40.0)
+                pt = to_px(x, y)
+                rp.moveTo(pt) if i == 0 else rp.lineTo(pt)
+            p.setPen(self._pen(hot if k == "RAMP_LENGTH" else ink, 2.6))
+            p.drawPath(rp)
+            bx, by, tx, ty = stad(-ramp)
+            # inward direction and the quarter-turn bend
+            ix = max(-S, min(S, bx)) - bx
+            iy = -by
+            iL = math.hypot(ix, iy) or 1.0
+            ix, iy = ix / iL, iy / iL
+            br = v["BEND_RADIUS"]
+            sx, sy = bx, by
+            if br > 1e-6:
+                cross = (-ix) * ty - (-iy) * tx
+                sgn = 1.0 if cross > 0 else -1.0
+                ox, oy = (-ty * sgn, tx * sgn)
+                ccx, ccy = bx + br * ox, by + br * oy
+                bp = QtGui.QPainterPath()
+                for i in range(25):
+                    a = -sgn * (math.pi / 2) * (1.0 - i / 24.0)
+                    ca, sa = math.cos(a), math.sin(a)
+                    ex, ey = bx - ccx, by - ccy
+                    pt = to_px(ccx + ex * ca - ey * sa,
+                               ccy + ex * sa + ey * ca)
+                    bp.moveTo(pt) if i == 0 else bp.lineTo(pt)
+                p.setPen(self._pen(hot if k == "BEND_RADIUS" else ink, 2.6))
+                p.drawPath(bp)
+                a = -sgn * (math.pi / 2)
+                ca, sa = math.cos(a), math.sin(a)
+                ex, ey = bx - ccx, by - ccy
+                sx, sy = ccx + ex * ca - ey * sa, ccy + ex * sa + ey * ca
+                p.setPen(self._pen(hot if k == "BEND_RADIUS" else faint,
+                                   1.0, DASH))
+                p.drawLine(to_px(ccx, ccy), to_px(bx, by))
+                mid = to_px((ccx + bx) / 2.0, (ccy + by) / 2.0)
+                self._text(p, mid.x(), mid.y(), "R %.1f" % br,
+                           hot if k == "BEND_RADIUS" else faint)
+            # straight channel + the pocket you draw yourself
+            fl = v["FACE_CHANNEL_LEN"]
+            ax, ay = sx + ix * fl, sy + iy * fl
+            p.setPen(self._pen(hot if k == "FACE_CHANNEL_LEN" else ink, 2.6))
+            p.drawLine(to_px(sx, sy), to_px(ax, ay))
+            p.setPen(self._pen(ink, 1.0))
+            p.setBrush(hot)
+            p.drawEllipse(to_px(ax, ay), 3.0, 3.0)
+            p.setBrush(NO_BRUSH)
+            self._text(p, to_px(ax, ay).x(), to_px(ax, ay).y() - 13,
+                       "anchor", faint)
+            ca_len = v["CONNECTOR_ALLOWANCE"]
+            if ca_len > 0:
+                p.setPen(self._pen(
+                    hot if k == "CONNECTOR_ALLOWANCE" else faint, 1.6, DASH))
+                p.drawLine(to_px(ax, ay),
+                           to_px(ax + ix * ca_len * 0.35,
+                                 ay + iy * ca_len * 0.35))
+                self._text(p, to_px(ax + ix * ca_len * 0.35,
+                                    ay + iy * ca_len * 0.35).x(),
+                           to_px(ax + ix * ca_len * 0.35,
+                                 ay + iy * ca_len * 0.35).y() + 12,
+                           "your pocket %.0f" % ca_len,
+                           hot if k == "CONNECTOR_ALLOWANCE" else faint)
+            if k == "RAMP_LENGTH":
+                mx, my, _, _ = stad(-ramp * 0.5)
+                self._text(p, to_px(mx, my).x(), to_px(mx, my).y() - 14,
+                           "ramp %.0f" % ramp, hot)
+            if k == "FACE_CHANNEL_LEN":
+                self._dim(p, to_px(sx, sy), to_px(ax, ay),
+                          "%.0f" % fl, True, off=10.0)
+            # overall sizes
+            self._dim(p, to_px(-half_len, -hw), to_px(half_len, -hw),
+                      "LENGTH %.0f" % v["LENGTH"], k == "LENGTH", off=22.0)
+            self._dim(p, to_px(-half_len, -hw), to_px(-half_len, hw),
+                      "WIDTH %.0f" % v["WIDTH"], k == "WIDTH", off=26.0)
+
+        def _side(self, p, box, g):
+            """side view: overall height, end margins and the turn stack"""
+            ink, hot, faint, fill = self._colours()
+            v = self.values()
+            H, z0, pitch = g["H"], g["z0"], g["pitch"]
+            wide = v["LENGTH"]
+            sc = min(box.width() * 0.62 / wide, box.height() / max(H, 1.0))
+            w2 = wide * sc / 2.0
+            cx = box.left() + box.width() * 0.42
+            base = box.bottom()
+
+            def yz(z):
+                return base - z * sc
+
+            p.setPen(self._pen(ink, 1.6))
+            p.setBrush(fill)
+            p.drawRoundedRect(QtCore.QRectF(cx - w2, yz(H), 2 * w2, H * sc),
+                              3.0, 3.0)
+            p.setBrush(NO_BRUSH)
+            # the turns
+            p.setPen(self._pen(faint, 1.8))
+            k = self.key
+            turns = int(min(g["turns"], 60))
+            for i in range(turns + 1):
+                z = z0 + i * pitch
+                if z > H - z0 + 1e-6:
+                    break
+                p.drawLine(PT(cx - w2, yz(z)), PT(cx + w2, yz(z - pitch * 0.5)))
+            p.setPen(self._pen(hot if k == "CABLE_LENGTH" else ink, 2.2))
+            p.drawLine(PT(cx - w2, yz(z0)), PT(cx + w2, yz(z0 - pitch * 0.5)))
+            self._dim(p, PT(cx + w2, yz(0)), PT(cx + w2, yz(H)),
+                      "HEIGHT %.1f" % H, k == "HEIGHT", off=-26.0)
+            self._dim(p, PT(cx - w2, yz(0)), PT(cx - w2, yz(z0)),
+                      "margin %.1f" % z0, False, off=22.0)
+            self._text(p, cx, yz(H) - 12,
+                       "%.0f mm cable → %.1f turns"
+                       % (v["CABLE_LENGTH"], g["turns"]),
+                       hot if k == "CABLE_LENGTH" else ink)
+
+    class FocusWatch(QtCore.QObject):
+        def __init__(self, owner, keys):
+            QtCore.QObject.__init__(self, owner)
+            self.keys = keys
+            self.diagram = None
+
+        def eventFilter(self, obj, ev):
+            if ev.type() == FOCUS_IN and self.diagram is not None:
+                key = self.keys.get(obj)
+                if key:
+                    self.diagram.set_key(key)
+            return False
 
     prefs = App.ParamGet("User parameter:BaseApp/Preferences/Macros/CableSpool")
     g = globals()
 
     dlg = QtWidgets.QDialog(FreeCADGui.getMainWindow())
     dlg.setWindowTitle("Cable Spool parameters")
-    form = QtWidgets.QFormLayout(dlg)
+    outer = QtWidgets.QHBoxLayout(dlg)
+    form = QtWidgets.QFormLayout()
+    outer.addLayout(form)
     boxes = {}
+    by_widget = {}
     for key, label, lo, hi, dec, step, suf in DIALOG_FIELDS:
         sb = QtWidgets.QDoubleSpinBox()
         sb.setRange(lo, hi)
@@ -107,6 +551,27 @@ def ask_values():
         sb.setValue(prefs.GetFloat(key, float(g[key])))
         form.addRow(label, sb)
         boxes[key] = sb
+        by_widget[sb] = key
+
+    def current():
+        return dict((k, sb.value()) for k, sb in boxes.items())
+
+    diagram = Diagram(current, dlg)
+    watch = FocusWatch(dlg, by_widget)
+    watch.diagram = diagram
+    for key, sb in boxes.items():
+        sb.installEventFilter(watch)
+        sb.valueChanged.connect(
+            lambda _v, k=key: (diagram.set_key(k), diagram.update()))
+
+    right = QtWidgets.QVBoxLayout()
+    hint = QtWidgets.QLabel("Click a field - the drawing shows what it means "
+                            "(to scale, from the current values).")
+    hint.setWordWrap(True)
+    right.addWidget(hint)
+    right.addWidget(diagram, 1)
+    outer.addLayout(right, 1)
+
     bb = QtWidgets.QDialogButtonBox(
         QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
     bb.accepted.connect(dlg.accept)
