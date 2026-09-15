@@ -1,0 +1,433 @@
+# -*- coding: utf-8 -*-
+"""
+CableSpool.FCMacro  -  parametric stadium-shaped cable spool for FreeCAD
+
+Body     : stadium (rectangle + semicircle ends), extruded in Z
+Side     : helical groove the cable snaps into (constant pitch)
+Ends     : first/last loop continue into a ramp "corridor" that climbs to the
+           bottom/top face, then an open channel runs inward on the face.
+           Draw your USB-C connector pocket on the face at the channel end
+           (markers "Anchor_Bottom" / "Anchor_Top" show where).
+
+Output   : PartDesign Body "CableSpool" (base shape inside) -> sketch on the
+           top/bottom face and Pocket your connector shape directly.
+
+Edit the parameters below, then run the macro again (it builds a new set).
+All dimensions in mm.
+"""
+
+import math
+import FreeCAD as App
+import Part
+
+# ============================ PARAMETERS ============================
+CABLE_LENGTH        = 1500.0  # total cable length incl. connectors
+CABLE_DIAMETER      = 3.5     # MEASURE your cable with calipers
+CLEARANCE           = 0.3     # added to cable diameter for the groove
+GROOVE_DEPTH_FAC    = 0.85    # groove depth / groove diameter
+                              #   0.5 = half-open, 0.8-0.9 = snap-in lip, <1.0 !
+MIN_WALL            = 1.2     # plastic rib between neighbouring turns
+
+WIDTH               = 40.0    # outer width  (= diameter of the round ends)
+LENGTH              = 75.0    # outer length (>= WIDTH)
+HEIGHT              = 0.0     # 0 = auto from cable length
+                              # >0 = fixed height, pitch is adapted
+
+END_MARGIN          = 0.0     # face -> centre of first/last turn, 0 = auto
+RAMP_LENGTH         = 25.0    # length along perimeter used to climb to face
+FACE_CHANNEL_LEN    = 12.0    # open channel on face, from edge inward
+FACE_DEPTH          = 0.0     # depth of face channel, 0 = groove diameter
+CONNECTOR_ALLOWANCE = 30.0    # cable+connector length (per end) that sits in
+                              # the pocket YOU will draw after the channel
+EDGE_FILLET         = 1.5     # top/bottom outer edge fillet, 0 = none
+SAMPLE_STEP         = 3.0     # ramp sampling step (smaller = smoother, slower);
+                              # the spiral itself is exact geometry
+
+USE_DIALOG          = True    # ask for values at start (remembers last input)
+# ====================================================================
+
+V = App.Vector
+
+
+def log(msg):
+    App.Console.PrintMessage("[CableSpool] " + msg + "\n")
+
+
+def warn(msg):
+    App.Console.PrintWarning("[CableSpool] " + msg + "\n")
+
+
+# ---------------------------------------------------------------- input dialog
+# (key, label, min, max, decimals, step, suffix)
+DIALOG_FIELDS = [
+    ("CABLE_LENGTH",        "Cable length",                 100, 10000, 0, 50,  " mm"),
+    ("CABLE_DIAMETER",      "Cable diameter",               1.0, 15.0,  2, 0.1, " mm"),
+    ("CLEARANCE",           "Groove clearance",             0.0, 2.0,   2, 0.05, " mm"),
+    ("GROOVE_DEPTH_FAC",    "Groove depth factor (0.5-0.95)", 0.5, 0.95, 2, 0.05, ""),
+    ("WIDTH",               "Spool width",                  10, 300,    1, 1,   " mm"),
+    ("LENGTH",              "Spool length (>= width)",      10, 500,    1, 1,   " mm"),
+    ("HEIGHT",              "Spool height (0 = auto)",      0, 500,     1, 1,   " mm"),
+    ("MIN_WALL",            "Wall between turns",           0.4, 10,    2, 0.1, " mm"),
+    ("RAMP_LENGTH",         "Corridor ramp length",         5, 200,     1, 1,   " mm"),
+    ("FACE_CHANNEL_LEN",    "Face channel length",          0.5, 200,   1, 1,   " mm"),
+    ("CONNECTOR_ALLOWANCE", "Cable+connector in pocket (per end)", 0, 200, 1, 1, " mm"),
+]
+
+
+class Cancelled(Exception):
+    pass
+
+
+def ask_values():
+    try:
+        from PySide6 import QtWidgets
+    except ImportError:
+        try:
+            from PySide2 import QtWidgets
+        except ImportError:
+            from PySide import QtGui as QtWidgets
+    import FreeCADGui
+
+    prefs = App.ParamGet("User parameter:BaseApp/Preferences/Macros/CableSpool")
+    g = globals()
+
+    dlg = QtWidgets.QDialog(FreeCADGui.getMainWindow())
+    dlg.setWindowTitle("Cable Spool parameters")
+    form = QtWidgets.QFormLayout(dlg)
+    boxes = {}
+    for key, label, lo, hi, dec, step, suf in DIALOG_FIELDS:
+        sb = QtWidgets.QDoubleSpinBox()
+        sb.setRange(lo, hi)
+        sb.setDecimals(dec)
+        sb.setSingleStep(step)
+        sb.setSuffix(suf)
+        sb.setValue(prefs.GetFloat(key, float(g[key])))
+        form.addRow(label, sb)
+        boxes[key] = sb
+    bb = QtWidgets.QDialogButtonBox(
+        QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+    bb.accepted.connect(dlg.accept)
+    bb.rejected.connect(dlg.reject)
+    form.addRow(bb)
+
+    run = getattr(dlg, "exec", None) or dlg.exec_
+    if not run():
+        raise Cancelled("cancelled by user")
+    for key, sb in boxes.items():
+        g[key] = sb.value()
+        prefs.SetFloat(key, sb.value())
+
+
+if USE_DIALOG and App.GuiUp:
+    ask_values()
+
+# ---------------------------------------------------------------- derived
+d = CABLE_DIAMETER + CLEARANCE          # groove diameter
+R = d / 2.0
+if not (0.5 <= GROOVE_DEPTH_FAC < 1.0):
+    raise ValueError("GROOVE_DEPTH_FAC must be in [0.5, 1.0)")
+if LENGTH < WIDTH:
+    raise ValueError("LENGTH must be >= WIDTH")
+
+depth = GROOVE_DEPTH_FAC * d
+r = WIDTH / 2.0 - depth + R             # groove centre-line radius
+S = (LENGTH - WIDTH) / 2.0              # half length of straight part
+P = 4.0 * S + 2.0 * math.pi * r         # centre-line perimeter per turn
+if r <= R + 2.0:
+    raise ValueError("WIDTH too small for this cable")
+
+face_depth = FACE_DEPTH if FACE_DEPTH > 0 else d
+zb = face_depth - R                     # centre z of bottom face channel
+z0 = END_MARGIN if END_MARGIN > 0 else face_depth + MIN_WALL + R
+if z0 - zb < 0.5:
+    raise ValueError("END_MARGIN too small (ramp would not climb)")
+if RAMP_LENGTH > 0.8 * P:
+    raise ValueError("RAMP_LENGTH too long for this perimeter")
+
+ramp3d = math.hypot(RAMP_LENGTH, z0 - zb)
+per_end = ramp3d + FACE_CHANNEL_LEN + CONNECTOR_ALLOWANCE
+L_spiral = CABLE_LENGTH - 2.0 * per_end
+if L_spiral <= P:
+    raise ValueError("Cable too short for this spool size")
+
+if HEIGHT <= 0:
+    pitch = d + MIN_WALL
+    turns = L_spiral / math.hypot(P, pitch)
+    H = 2.0 * z0 + pitch * turns
+else:
+    H = HEIGHT
+    pitch = d + MIN_WALL
+    for _ in range(10):  # iterate: 3D length depends on pitch
+        turns = L_spiral / math.hypot(P, pitch)
+        pitch = (H - 2.0 * z0) / turns
+    if pitch < d + MIN_WALL:
+        need = 2.0 * z0 + (d + MIN_WALL) * turns
+        raise ValueError("HEIGHT too small: need >= %.1f mm "
+                         "(or increase LENGTH/WIDTH)" % need)
+
+u_end = turns * P                       # perimeter-parameter at spiral end
+zt = H - zb                             # centre z of top face channel
+z_end = z0 + pitch * turns
+
+log("perimeter/turn %.1f  turns %.2f  pitch %.2f  height %.1f"
+    % (P, turns, pitch, H))
+
+
+# ---------------------------------------------------------------- geometry helpers
+def stadium_xy(u):
+    """point + tangent on centre-line; u=0 is middle of the -Y straight side,
+    running counter-clockwise (seen from top)."""
+    u = u % P
+    if u < S:
+        return u, -r, 1.0, 0.0
+    u -= S
+    if u < math.pi * r:
+        th = -math.pi / 2 + u / r
+        return S + r * math.cos(th), r * math.sin(th), -math.sin(th), math.cos(th)
+    u -= math.pi * r
+    if u < 2 * S:
+        return S - u, r, -1.0, 0.0
+    u -= 2 * S
+    if u < math.pi * r:
+        th = math.pi / 2 + u / r
+        return -S + r * math.cos(th), r * math.sin(th), -math.sin(th), math.cos(th)
+    u -= math.pi * r
+    return -S + u, -r, 1.0, 0.0
+
+
+def smooth(t):
+    t = max(0.0, min(1.0, t))
+    return t * t * (3 - 2 * t)
+
+
+def z_of(u):
+    if u < 0:
+        return z0 - (z0 - zb) * smooth(-u / RAMP_LENGTH)
+    if u <= u_end:
+        return z0 + pitch * u / P
+    return z_end + (zt - z_end) * smooth((u - u_end) / RAMP_LENGTH)
+
+
+def inward_dir(x, y):
+    cx = max(-S, min(S, x))
+    vx, vy = cx - x, -y
+    n = math.hypot(vx, vy)
+    return vx / n, vy / n
+
+
+# --- exact centre-line -------------------------------------------------------
+# The centre-line lies on the surface of the stadium prism, so it decomposes
+# into exact geometry: the straight sides give 3D line segments, the round ends
+# give true helix arcs.  Building the spine this way (instead of interpolating a
+# BSpline through sampled points) is what makes the sweep work - OCC's
+# BRepOffsetAPI_MakePipeShell fails with "MakeSolid" on a BSpline spine.
+KNOTS = [0.0, S, S + math.pi * r, 3.0 * S + math.pi * r,
+         3.0 * S + 2.0 * math.pi * r, P]
+KINDS = ["L", "A+", "L", "A-", "L"]      # straight / +X end / straight / -X end
+
+
+def segment_of(k):
+    """(start, end, kind) of the stadium segment holding k in [0, P);
+    zero-length segments (LENGTH == WIDTH) are skipped."""
+    for i in range(5):
+        if k < KNOTS[i + 1] - 1e-9:
+            return KNOTS[i], KNOTS[i + 1], KINDS[i]
+    return KNOTS[4], KNOTS[5], KINDS[4]
+
+
+def path_point(u):
+    x, y, _, _ = stadium_xy(u)
+    return V(x, y, z_of(u))
+
+
+def path_edge(u1, u2):
+    """one exact edge of the centre-line; u1..u2 must stay inside one segment"""
+    z1, z2 = z_of(u1), z_of(u2)
+    lo, _, kind = segment_of(0.5 * (u1 + u2) % P)
+    if kind == "L":
+        return Part.LineSegment(path_point(u1), path_point(u2)).toShape()
+    cx = S if kind == "A+" else -S
+    th0 = (-math.pi / 2 if kind == "A+" else math.pi / 2) + (u1 % P - lo) / r
+    dth = (u2 - u1) / r
+    dz = z2 - z1
+    if abs(dz) < 1e-7:                      # flat -> plain circular arc
+        p = [V(cx + r * math.cos(th0 + dth * f),
+               r * math.sin(th0 + dth * f), z1) for f in (0.0, 0.5, 1.0)]
+        return Part.Arc(*p).toShape()
+    e = Part.makeHelix(2.0 * math.pi * dz / dth, dz, r).Edges[0]
+    e.rotate(V(0, 0, 0), V(0, 0, 1), math.degrees(th0))
+    e.translate(V(cx, 0, z1))
+    return e
+
+
+def split_u(ua, ub, step):
+    """u values from ua to ub, cut at every stadium knot; with step given the
+    pieces are additionally capped at that length (needed on the ramps, where
+    z is not linear in u, so one piece = one constant-pitch helix)."""
+    cuts = set([ua, ub])
+    t = int(math.floor(ua / P))
+    while t * P < ub:
+        for k in KNOTS:
+            if ua + 1e-7 < t * P + k < ub - 1e-7:
+                cuts.add(t * P + k)
+        t += 1
+    cuts = sorted(cuts)
+    if not step:
+        return cuts
+    out = []
+    for a, b in zip(cuts, cuts[1:]):
+        m = max(1, int(math.ceil((b - a) / step)))
+        out += [a + (b - a) * j / m for j in range(m)]
+    out.append(cuts[-1])
+    return out
+
+
+def centre_line():
+    us = (split_u(-RAMP_LENGTH, 0.0, SAMPLE_STEP)[:-1]
+          + split_u(0.0, u_end, None)[:-1]
+          + split_u(u_end, u_end + RAMP_LENGTH, SAMPLE_STEP))
+    edges = [path_edge(us[i], us[i + 1]) for i in range(len(us) - 1)
+             if us[i + 1] - us[i] > 1e-7]
+    return Part.Wire(edges)
+
+
+def sweep_circle(spine):
+    """circle of radius R swept along the spine, as a solid"""
+    e0 = spine.OrderedEdges[0]
+    prof = Part.Wire(Part.Circle(e0.valueAt(e0.FirstParameter),
+                                 e0.tangentAt(e0.FirstParameter), R).toShape())
+    try:
+        sol = spine.makePipeShell([prof], True, False)
+        if sol.isValid() and sol.Volume > 0:
+            return sol
+        warn("sweep result invalid, falling back to per-edge sweep")
+    except Exception as e:
+        warn("single sweep failed (%s), falling back to per-edge sweep" % e)
+    parts = []
+    for e in spine.OrderedEdges:
+        p = e.valueAt(e.FirstParameter)
+        pr = Part.Wire(Part.Circle(p, e.tangentAt(e.FirstParameter), R).toShape())
+        parts.append(Part.Wire([e]).makePipeShell([pr], True, False))
+        parts.append(Part.makeSphere(R, p))
+    last = spine.OrderedEdges[-1]
+    parts.append(Part.makeSphere(R, last.valueAt(last.LastParameter)))
+    return parts[0].fuse(parts[1:])
+
+
+def face_channel(bx, by, zc, top):
+    """open U-channel on a face, from (bx,by) inward."""
+    dx, dy = inward_dir(bx, by)
+    ln = FACE_CHANNEL_LEN
+    cx, cy = bx + dx * ln, by + dy * ln
+    ext = H - zc + 1.0 if top else zc + 1.0      # to beyond the face
+    zlo = zc if top else -1.0
+    shapes = [
+        Part.makeCylinder(R, ln, V(bx, by, zc), V(dx, dy, 0)),
+        Part.makeSphere(R, V(bx, by, zc)),
+        Part.makeSphere(R, V(cx, cy, zc)),
+        Part.makeCylinder(R, ext, V(bx, by, zlo)),
+        Part.makeCylinder(R, ext, V(cx, cy, zlo)),
+    ]
+    box = Part.makeBox(ln, d, ext, V(0, -R, zlo))
+    box.rotate(V(0, 0, 0), V(0, 0, 1), math.degrees(math.atan2(dy, dx)))
+    box.translate(V(bx, by, 0))
+    shapes.append(box)
+    return shapes, V(cx, cy, H if top else 0.0)
+
+
+# ---------------------------------------------------------------- body
+def make_body():
+    hw = WIDTH / 2.0
+    if S < 1e-6:
+        body = Part.makeCylinder(hw, H)
+    else:
+        p1, p2 = V(-S, -hw, 0), V(S, -hw, 0)
+        p3, p4 = V(S, hw, 0), V(-S, hw, 0)
+        edges = [
+            Part.LineSegment(p1, p2).toShape(),
+            Part.Arc(p2, V(S + hw, 0, 0), p3).toShape(),
+            Part.LineSegment(p3, p4).toShape(),
+            Part.Arc(p4, V(-S - hw, 0, 0), p1).toShape(),
+        ]
+        body = Part.Face(Part.Wire(edges)).extrude(V(0, 0, H))
+    if EDGE_FILLET > 0:
+        fe = [e for e in body.Edges
+              if all(abs(v.Z) < 1e-6 or abs(v.Z - H) < 1e-6 for v in e.Vertexes)
+              and abs(e.Vertexes[0].Z - e.Vertexes[-1].Z) < 1e-6]
+        try:
+            body = body.makeFillet(EDGE_FILLET, fe)
+        except Exception as e:
+            warn("fillet skipped: %s" % e)
+    return body
+
+
+# ---------------------------------------------------------------- build
+doc = App.ActiveDocument or App.newDocument("CableSpool")
+
+spine = centre_line()
+log("sweeping groove (%d edges, %.0f mm centre-line) ..."
+    % (len(spine.Edges), spine.Length))
+groove = sweep_circle(spine)
+
+p_bot, p_top = path_point(-RAMP_LENGTH), path_point(u_end + RAMP_LENGTH)
+bot_shapes, anchor_bot = face_channel(p_bot.x, p_bot.y, zb, top=False)
+top_shapes, anchor_top = face_channel(p_top.x, p_top.y, zt, top=True)
+if FACE_CHANNEL_LEN > r - R:
+    warn("FACE_CHANNEL_LEN is long - channels may cross the centre")
+
+log("boolean cut ...")
+# Cut sequentially (groove, then channels). Fusing all tools first, or cutting
+# them in one multi-tool call, tends to yield an invalid/split result because
+# the groove and channel shapes touch each other near the ramps; one cut at a
+# time keeps every intermediate result a single valid solid.
+spool = make_body().cut(groove)
+for ch in bot_shapes + top_shapes:
+    spool = spool.cut(ch)
+try:
+    spool = spool.removeSplitter()
+except Exception:
+    pass
+if not spool.isValid():
+    warn("result shape reports invalid - try a smaller SAMPLE_STEP")
+
+base = doc.addObject("Part::Feature", "CableSpool_Base")
+base.Shape = spool
+
+sp = doc.addObject("Part::Feature", "SpiralPath")
+sp.Shape = spine
+try:
+    sp.ViewObject.Visibility = False
+except Exception:
+    pass
+
+for name, p in (("Anchor_Bottom", anchor_bot), ("Anchor_Top", anchor_top)):
+    a = doc.addObject("Part::Feature", name)
+    a.Shape = Part.Vertex(p)
+    try:
+        a.ViewObject.PointSize = 8
+        a.ViewObject.PointColor = (1.0, 0.0, 0.0)
+    except Exception:
+        pass
+
+try:
+    body = doc.addObject("PartDesign::Body", "CableSpool")
+    body.BaseFeature = base
+except Exception as e:
+    warn("could not create PartDesign Body (%s); use CableSpool_Base" % e)
+
+doc.recompute()
+try:
+    import FreeCADGui
+    FreeCADGui.SendMsgToActiveView("ViewFit")
+except Exception:
+    pass
+
+log("DONE  size %.1f x %.1f x %.1f mm" % (LENGTH, WIDTH, H))
+log("groove Ø%.2f, centre radius %.2f, turns %.2f, pitch %.2f"
+    % (d, r, turns, pitch))
+log("spiral cable %.0f mm + 2 x %.0f mm (ramp+channel+pocket) = %.0f mm"
+    % (L_spiral, per_end, CABLE_LENGTH))
+log("pocket anchors: bottom (%.1f, %.1f, 0)  top (%.1f, %.1f, %.1f)"
+    % (anchor_bot.x, anchor_bot.y, anchor_top.x, anchor_top.y, H))
+log("-> sketch your connector pocket on each face starting at the anchor, "
+    "leaving about %.0f mm of cable+connector inside it" % CONNECTOR_ALLOWANCE)
