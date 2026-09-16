@@ -80,16 +80,15 @@ S      = (LENGTH - WIDTH)/2                  half straight length
 P      = 4*S + 2*pi*r                        centre-line perimeter per turn
 zb     = face_depth - R                      centre z of bottom face channel
 z0     = END_MARGIN or face_depth + MIN_WALL + R
-face_inset = FACE_INSET or r - max(2*d, R + MIN_WALL + 0.5)
+face_inset = FACE_INSET or r - max(3*d, R + MIN_WALL + 0.5)
 face_span  = >= FACE_TURN*P, stretched to wherever the tail comes out longest
 tail_len   = clear run across the face, less CONNECTOR_ALLOWANCE
 face_len   = turn-in length + release arc + tail_len
-per_end  = hypot(RAMP_LENGTH, z0-zb) + face_len + CONNECTOR_ALLOWANCE
-turns, and both runs' lengths, are solved together so the total lands on
-CABLE_LENGTH (fit_runs)
-L_spiral = CABLE_LENGTH - 2*per_end
-auto:   pitch = d + MIN_WALL; turns = L_spiral / hypot(P, pitch); H = 2*z0 + pitch*turns
-fixed:  iterate turns/pitch with H given; error if pitch < d + MIN_WALL
+pitch    = d + MIN_WALL                      (HEIGHT > 0: (HEIGHT - 2*z0)/turns)
+turns and both runs are solved together by fit_runs, so
+  2*hypot(RAMP_LENGTH, z0-zb) + face_len_bot + face_len_top
+  + 2*CONNECTOR_ALLOWANCE + turns*hypot(P, pitch)  ==  CABLE_LENGTH
+H        = HEIGHT or 2*z0 + pitch*turns
 ```
 
 Path: parameter `u` = distance along the stadium centre-line, `u = 0` at the
