@@ -82,6 +82,8 @@ P      = 4*S + 2*pi*r                        centre-line perimeter per turn
 zb     = face_depth - R                      centre z of bottom face channel
 z0     = END_MARGIN or face_depth + face_clear + R   (face_clear = FACE_CLEAR or MIN_WALL)
 face_inset = FACE_INSET or r - max(3*d, R + MIN_WALL + 0.5)
+             floored at (r + R + SLOT_EPS) - WIDTH/2 + max(MIN_WALL, 0.8)
+face_trans = sqrt(6 * face_inset * FACE_BEND)   length the inward move takes
 face_span  = >= FACE_TURN*P, stretched to wherever the tail comes out longest
 tail_len   = clear run across the face, less CONNECTOR_ALLOWANCE
 face_len   = turn-in length + release arc + tail_len
@@ -110,6 +112,16 @@ for the centre - it keeps going round the stadium while easing inward by
 and there is no corner anywhere). Offsetting a stadium point toward the centre
 segment keeps the same inward direction, so the offset path is just the same
 stadium at a shrinking radius.
+
+The inward move finishes within `face_trans` and the run then holds that depth,
+rather than easing over the whole run. Spread over the whole run it barely moves
+at the start, where the channel is still sitting on the wall and sawing the rim
+off: on one reported spool 60% of the run had the outer wall breached, against
+8% once the move is bounded. `face_trans` is the shortest move that still
+respects `FACE_BEND` - a smoothstep's curvature peaks at `6*inset/L²`, so
+`L = sqrt(6*inset*FACE_BEND)`. `face_inset` is floored at whatever puts the
+channel's outer edge inside the wall with a rib left over, since below that it
+cuts the rim however slowly it gets there.
 
 The swept tube **stops** where the ramp reaches the face; the face run itself is
 a prismatic channel - a ribbon of width `d` around the path, extruded through

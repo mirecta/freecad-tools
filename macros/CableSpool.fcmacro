@@ -94,8 +94,13 @@ def poly_len(pts):
                for i in range(len(pts) - 1))
 
 
-def face_stadium_pt(geo, u, t):
-    """point on the inward-turning face path, t = 0 at the ramp, 1 at the end"""
+def face_stadium_pt(geo, u, t, span=0.0):
+    """point on the inward-turning face path, t = 0 at the ramp, 1 at the end.
+
+    The inward move finishes within geo["trans"] and the run then holds that
+    depth. Easing it over the whole run instead leaves it hugging the wall at
+    the start, where it is still cutting the rim - on one reported spool that
+    was 60% of the run with the outer wall breached."""
     S, r, P, inset = geo["S"], geo["r"], geo["P"], geo["inset"]
     u = u % P
     if u < S:
@@ -112,7 +117,9 @@ def face_stadium_pt(geo, u, t):
         x, y = -S + (u - 3 * S - 2 * math.pi * r), -r
     vx, vy = max(-S, min(S, x)) - x, -y
     n = math.hypot(vx, vy) or 1.0
-    f = max(0.0, min(1.0, t))
+    trans = geo.get("trans") or 0.0
+    f = t * span / trans if trans > 0 and span > 0 else t
+    f = max(0.0, min(1.0, f))
     o = inset * f * f * (3 - 2 * f)
     return x + vx / n * o, y + vy / n * o
 
@@ -124,7 +131,7 @@ def face_turn_length(geo, u_start, sgn, span):
     total, prev, n = 0.0, None, 48
     for i in range(n + 1):
         t = i / float(n)
-        cur = face_stadium_pt(geo, u_start + sgn * t * span, t)
+        cur = face_stadium_pt(geo, u_start + sgn * t * span, t, span)
         if prev is not None:
             total += math.hypot(cur[0] - prev[0], cur[1] - prev[1])
         prev = cur
@@ -202,11 +209,12 @@ def face_plan(geo, u_start, sgn, spans=None, collect=False):
     best, steps, seen = None, 40, []
     for span in (spans if spans is not None
                  else [base + P * i / steps for i in range(steps + 1)]):
-        laid = [face_stadium_pt(geo, u_start + sgn * j / 16.0 * span, j / 16.0)
+        laid = [face_stadium_pt(geo, u_start + sgn * j / 16.0 * span,
+                                j / 16.0, span)
                 for j in range(14)]        # the run so far, minus its own tip
-        ex, ey = face_stadium_pt(geo, u_start + sgn * span, 1.0)
+        ex, ey = face_stadium_pt(geo, u_start + sgn * span, 1.0, span)
         bx, by = face_stadium_pt(geo, u_start + sgn * span * (1 - 1e-4),
-                                 1.0 - 1e-4)
+                                 1.0 - 1e-4, span)
         dx, dy = ex - bx, ey - by
         n = math.hypot(dx, dy)
         if n < 1e-9 or outside(ex, ey):
@@ -371,10 +379,13 @@ def preview_geometry(v):
         # the build's own planner, so the preview cannot drift from it
         inset = (v["FACE_INSET"] if v["FACE_INSET"] > 0
                  else max(0.0, r - max(3.0 * d, R + v["MIN_WALL"] + 0.5)))
+        inset = max(inset, (r + R + SLOT_EPS) - v["WIDTH"] / 2.0
+                    + max(v["MIN_WALL"], 0.8))
+        trans = math.sqrt(6.0 * inset * max(FACE_BEND, 1.0))
         geo = dict(S=S, r=r, P=P, R=R, MIN_WALL=v["MIN_WALL"],
                    WIDTH=v["WIDTH"], LENGTH=v["LENGTH"], inset=inset,
                    turn=v["FACE_TURN"], allow=v["CONNECTOR_ALLOWANCE"],
-                   bend=FACE_BEND, d=d, width=CONNECTOR_WIDTH)
+                   bend=FACE_BEND, d=d, width=CONNECTOR_WIDTH, trans=trans)
         geo["ramp_u"] = v["RAMP_LENGTH"]
         geo["len_of"] = lambda u, sg, o: (face_turn_length(geo, u, sg, o[0])
                                           + poly_len(o[1]) + o[3])
@@ -907,6 +918,18 @@ ramp3d = math.hypot(RAMP_LENGTH, z0 - zb)
 # draw off it - into the middle. Floor it at a radius the cable can still take.
 face_end_r = max(3.0 * d, R + MIN_WALL + 0.5)
 face_inset = FACE_INSET if FACE_INSET > 0 else max(0.0, r - face_end_r)
+# The channel has to get its outer edge inside the wall, with something left of
+# the rim, or it simply saws the rim off along the way.
+face_inset_min = (r + R + SLOT_EPS) - WIDTH / 2.0 + max(MIN_WALL, 0.8)
+if FACE_TURN > 0 and face_inset < face_inset_min:
+    warn("FACE_INSET %.1f mm leaves the face channel cutting the rim; "
+         "using %.1f mm" % (face_inset, face_inset_min))
+    face_inset = face_inset_min
+# ...and it should get there promptly rather than drifting in over the whole
+# run. Shortest move the cable will take: a smoothstep peaks at 6*inset/L^2 of
+# curvature, so L = sqrt(6*inset*FACE_BEND) is the tightest that still respects
+# the bend radius.
+face_trans = math.sqrt(6.0 * face_inset * max(FACE_BEND, 1.0))
 if FACE_TURN > 0 and r - face_inset <= R + MIN_WALL:
     raise ValueError("FACE_INSET %.1f mm is too deep for this spool "
                      "(groove centre would reach %.1f mm from the axis)"
@@ -919,7 +942,7 @@ def face_pt(u_start, sgn, span, t):
     """point on a face run, t = 0 at the ramp, 1 at the end of the turn-in"""
     x, y, _, _ = stadium_xy(u_start + sgn * t * span)
     nx, ny = inward_dir(x, y)
-    o = face_inset * smooth(t)
+    o = face_inset * smooth(min(1.0, t * span / face_trans))
     return x + nx * o, y + ny * o
 
 
@@ -939,7 +962,7 @@ def face_run_length(u_start, sgn, span):
 FACE_GEO = dict(S=S, r=r, P=P, R=R, MIN_WALL=MIN_WALL, WIDTH=WIDTH,
                 LENGTH=LENGTH, inset=face_inset, turn=FACE_TURN,
                 allow=CONNECTOR_ALLOWANCE, bend=FACE_BEND, d=d,
-                width=CONNECTOR_WIDTH)
+                width=CONNECTOR_WIDTH, trans=face_trans)
 
 
 def pick_face_run(u_start, sgn, spans=None, collect=False):
@@ -1026,12 +1049,12 @@ def z_of(u):
 
 def off_of(u):
     """how far the centre-line has moved inward from the wall; 0 everywhere
-    except the two face runs, where it eases in with the same smoothstep the
-    ramps use, so the join stays tangent-continuous"""
+    except the two face runs, where it eases in over face_trans and then holds
+    that depth; the smoothstep keeps the join with the ramp tangent-continuous"""
     if u < u_face_bot_end and span_bot > 0:
-        return face_inset * smooth((u_face_bot_end - u) / span_bot)
+        return face_inset * smooth(min(1.0, (u_face_bot_end - u) / face_trans))
     if u > u_face_top_start and span_top > 0:
-        return face_inset * smooth((u - u_face_top_start) / span_top)
+        return face_inset * smooth(min(1.0, (u - u_face_top_start) / face_trans))
     return 0.0
 
 
