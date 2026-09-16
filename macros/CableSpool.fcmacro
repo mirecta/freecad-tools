@@ -84,6 +84,11 @@ FACE_EXIT_ANGLE = (10.0, 55.0)
 FACE_BEND = 12.0                        # radius of that release arc
 
 
+def poly_len(pts):
+    return sum(math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1])
+               for i in range(len(pts) - 1))
+
+
 def face_stadium_pt(geo, u, t):
     """point on the inward-turning face path, t = 0 at the ramp, 1 at the end"""
     S, r, P, inset = geo["S"], geo["r"], geo["P"], geo["inset"]
@@ -121,7 +126,7 @@ def face_turn_length(geo, u_start, sgn, span):
     return total
 
 
-def face_plan(geo, u_start, sgn):
+def face_plan(geo, u_start, sgn, spans=None, collect=False):
     """Where a face run goes, as a pure function of the numbers - the dialog
     preview and the build both call this, so they cannot drift apart.
 
@@ -137,6 +142,10 @@ def face_plan(geo, u_start, sgn):
     space a connector actually occupies, and measuring a bare centre line
     instead picks headings that run down a lane with the channel alongside.
 
+    With `collect`, every turn-in length tried is returned instead of just the
+    winner, as (span, arc_pts, dir, tail_len, room) - that is what lets the two
+    ends be traded off against the cable budget.
+
     Returns (span, arc_pts, (dx, dy), tail_len); arc_pts walks the release arc
     from the end of the turn-in to where the straight begins."""
     S, r, P = geo["S"], geo["r"], geo["P"]
@@ -145,7 +154,7 @@ def face_plan(geo, u_start, sgn):
     half = geo["width"] / 2.0
     clear = geo["d"] + geo["MIN_WALL"]      # channel-to-channel spacing
     if base <= 0:
-        return base, [], (0.0, 0.0), 0.0
+        return [] if collect else (base, [], (0.0, 0.0), 0.0)
 
     def outside(x, y):
         return math.hypot(x - max(-S, min(S, x)), y) > lim
@@ -178,16 +187,16 @@ def face_plan(geo, u_start, sgn):
         nx, ny = -ty, tx
         run = 0.0
         while run < 2.0 * (geo["LENGTH"] + geo["WIDTH"]):
-            cx, cy = px + tx * (run + 2.0), py + ty * (run + 2.0)
+            cx, cy = px + tx * (run + 3.0), py + ty * (run + 3.0)
             if (blocked(cx, cy) or blocked(cx + nx * half, cy + ny * half)
                     or blocked(cx - nx * half, cy - ny * half)):
                 break
-            run += 2.0
+            run += 3.0
         return pts, (tx, ty), run, bend * abs(theta)
 
-    best, steps = None, 60
-    for i in range(steps + 1):
-        span = base + P * i / steps
+    best, steps, seen = None, 40, []
+    for span in (spans if spans is not None
+                 else [base + P * i / steps for i in range(steps + 1)]):
         laid = [face_stadium_pt(geo, u_start + sgn * j / 16.0 * span, j / 16.0)
                 for j in range(14)]        # the run so far, minus its own tip
         ex, ey = face_stadium_pt(geo, u_start + sgn * span, 1.0)
@@ -199,17 +208,87 @@ def face_plan(geo, u_start, sgn):
             continue
         dx, dy = dx / n, dy / n
         lo_a, hi_a = FACE_EXIT_ANGLE
-        for k in range(10):
-            deg = lo_a + (hi_a - lo_a) * k / 9.0
+        for k in range(6):
+            deg = lo_a + (hi_a - lo_a) * k / 5.0
             got = try_run(span, laid, ex, ey, dx, dy, deg)
             if got is None:
                 continue
             pts, dirn, free, arc_len = got
+            if collect:
+                seen.append((span, pts, dirn,
+                             max(0.0, free - geo["allow"]), free))
             if best is None or free > best[3] + 1.0:
                 best = (span, pts, dirn, free, arc_len)
+    if collect:
+        return seen
     if best is None:
         return base, [], (0.0, 0.0), 0.0
     return best[0], best[1], best[2], max(0.0, best[3] - geo["allow"])
+
+
+def fit_runs(geo, cable, ramp3d, allow, z0, height, pitch0, plan_at):
+    """Pick the two face runs and the turn count so the cable comes out right.
+
+    The turn count cannot do this on its own: one turn costs hypot(P, pitch),
+    which is within 0.1 mm of the perimeter, so a longer spiral shortens the top
+    run's approach by the same amount and the two cancel. Solving on it either
+    never settles or closes the budget by pinning a run somewhere that leaves a
+    connector nowhere to sit.
+
+    What does work is that each run's length is free over a whole lap, so the
+    pair spans two laps and almost any turn count can be met by some
+    combination. Both ends are wanted anyway - only runs that leave the
+    connector its full clearance are considered - so pair them up, and among the
+    pairs that close the budget keep the one with the most room to spare.
+
+    `plan_at(u_start, sgn)` hands back the options at a phase. Returns
+    (turns, pitch, bottom, len_bot, top, len_top, cable_used)."""
+    P = geo["P"]
+
+    def usable(opts):
+        good = [o for o in opts if o[3] > 0.0]
+        return good or opts
+
+    none_run = (0.0, [], (0.0, 0.0), 0.0, 0.0)
+    bots = usable(plan_at(-geo["ramp_u"], -1.0)) or [none_run]
+    lb = [geo["len_of"](-geo["ramp_u"], -1.0, o) for o in bots]
+    roomy = max(range(len(bots)), key=lambda k: bots[k][3])
+
+    def pitch_for(t):
+        return (height - 2.0 * z0) / t if height > 0 else pitch0
+
+    best = None
+    seed = (cable - 2.0 * (ramp3d + allow) - 2.0 * lb[roomy]) \
+        / math.hypot(P, pitch0)
+    for step in (-0.4, -0.2, 0.0, 0.2, 0.4):
+        t = seed + step
+        if t < 1.0:
+            continue
+        per = math.hypot(P, pitch_for(t))
+        u_t = t * P + geo["ramp_u"]
+        tops = usable(plan_at(u_t, 1.0)) or [none_run]
+        lt = [geo["len_of"](u_t, 1.0, o) for o in tops]
+        target = cable - 2.0 * (ramp3d + allow) - t * per
+        for i, a in enumerate(lb):
+            for j, b in enumerate(lt):
+                over = a + b - target
+                if abs(over) > 30.0:        # far too wrong to bother scoring
+                    continue
+                score = (over > 0.05, round(abs(over), 1),
+                         -min(bots[i][3], tops[j][3]))
+                if best is None or score < best[0]:
+                    best = (score, t, pitch_for(t), bots[i], a, tops[j], b,
+                            2.0 * (ramp3d + allow) + a + b + t * per)
+    if best is None:                        # not one pair was even close
+        t = max(seed, 1.0)
+        per = math.hypot(P, pitch_for(t))
+        u_t = t * P + geo["ramp_u"]
+        tops = usable(plan_at(u_t, 1.0)) or [none_run]
+        j = max(range(len(tops)), key=lambda k: tops[k][3])
+        b = geo["len_of"](u_t, 1.0, tops[j])
+        best = (None, t, pitch_for(t), bots[roomy], lb[roomy], tops[j], b,
+                2.0 * (ramp3d + allow) + lb[roomy] + b + t * per)
+    return best[1:]
 
 
 # ---------------------------------------------------------------- input dialog
@@ -288,28 +367,20 @@ def preview_geometry(v):
                    WIDTH=v["WIDTH"], LENGTH=v["LENGTH"], inset=inset,
                    turn=v["FACE_TURN"], allow=v["CONNECTOR_ALLOWANCE"],
                    bend=FACE_BEND, d=d, width=CONNECTOR_WIDTH)
-        span, arc_pts, tail_dir, tail_len = face_plan(geo, -v["RAMP_LENGTH"], -1.0)
-        arc_len = sum(math.hypot(arc_pts[i + 1][0] - arc_pts[i][0],
-                                 arc_pts[i + 1][1] - arc_pts[i][1])
-                      for i in range(len(arc_pts) - 1))
-        face_len = (face_turn_length(geo, -v["RAMP_LENGTH"], -1.0, span)
-                    + arc_len + tail_len)
-        ramp3d = math.hypot(v["RAMP_LENGTH"], z0 - zb)
-        # both face runs are congruent at a half turn, so no loop is needed
-        spiral = v["CABLE_LENGTH"] - 2.0 * (ramp3d + face_len
-                                            + v["CONNECTOR_ALLOWANCE"])
-        if spiral <= P:
+        geo["ramp_u"] = v["RAMP_LENGTH"]
+        geo["len_of"] = lambda u, sg, o: (face_turn_length(geo, u, sg, o[0])
+                                          + poly_len(o[1]) + o[3])
+        fit = fit_runs(geo, v["CABLE_LENGTH"],
+                       math.hypot(v["RAMP_LENGTH"], z0 - zb),
+                       v["CONNECTOR_ALLOWANCE"], z0, v["HEIGHT"], pitch,
+                       lambda u, sg: face_plan(geo, u, sg, collect=True))
+        if fit is None:
             return None
-        turns = spiral / math.hypot(P, pitch)
-        if v["HEIGHT"] > 0:
-            for _ in range(10):
-                turns = spiral / math.hypot(P, pitch)
-                pitch = max(d + v["MIN_WALL"], (v["HEIGHT"] - 2.0 * z0) / turns)
-        turns = max(1.0, math.floor(turns * 2.0) / 2.0)
-        if v["HEIGHT"] > 0:
-            pitch = max(d + v["MIN_WALL"], (v["HEIGHT"] - 2.0 * z0) / turns)
+        turns, pitch, bot, face_len, top, len_top, used = fit
+        span, arc_pts, tail_dir, tail_len = bot[0], bot[1], bot[2], bot[3]
         H = v["HEIGHT"] if v["HEIGHT"] > 0 else 2.0 * z0 + pitch * turns
-        per_end = ramp3d + face_len + v["CONNECTOR_ALLOWANCE"]
+        per_end = (math.hypot(v["RAMP_LENGTH"], z0 - zb)
+                   + 0.5 * (face_len + len_top) + v["CONNECTOR_ALLOWANCE"])
         return dict(d=d, R=R, depth=depth, r=r, S=S, P=P, pitch=pitch,
                     z0=z0, zb=zb, turns=turns, H=H, per_end=per_end,
                     inset=inset, face_len=face_len, span=span,
@@ -856,13 +927,15 @@ def face_run_length(u_start, sgn, span):
     return total
 
 
-def pick_face_run(u_start, sgn):
+FACE_GEO = dict(S=S, r=r, P=P, R=R, MIN_WALL=MIN_WALL, WIDTH=WIDTH,
+                LENGTH=LENGTH, inset=face_inset, turn=FACE_TURN,
+                allow=CONNECTOR_ALLOWANCE, bend=FACE_BEND, d=d,
+                width=CONNECTOR_WIDTH)
+
+
+def pick_face_run(u_start, sgn, spans=None, collect=False):
     """see face_plan; this is the build's call into it"""
-    return face_plan(dict(S=S, r=r, P=P, R=R, MIN_WALL=MIN_WALL, WIDTH=WIDTH,
-                          LENGTH=LENGTH, inset=face_inset, turn=FACE_TURN,
-                          allow=CONNECTOR_ALLOWANCE, bend=FACE_BEND, d=d,
-                          width=CONNECTOR_WIDTH),
-                     u_start, sgn)
+    return face_plan(FACE_GEO, u_start, sgn, spans, collect)
 
 
 def spiral_from(len_bot, len_top):
@@ -885,39 +958,28 @@ def arc_length_of(pts):
                for i in range(len(pts) - 1))
 
 
-span_bot, arc_bot, tail_dir_bot, tail_len_bot = pick_face_run(-RAMP_LENGTH, -1.0)
-turn_len_bot = face_run_length(-RAMP_LENGTH, -1.0, span_bot)
-face_len_bot = turn_len_bot + arc_length_of(arc_bot) + tail_len_bot
+def run_length(u_start, sgn, opt):
+    """3D length of a face run option: turn-in + release arc + straight"""
+    return (face_run_length(u_start, sgn, opt[0]) + arc_length_of(opt[1])
+            + opt[3])
 
-# Snap the turn count to a half turn. stadium_xy(-u) is stadium_xy(u) mirrored
-# in X, and u -> u + P/2 is the stadium's own 180 deg symmetry, so at a whole or
-# half turn the top run is congruent to the bottom one: same length, same room,
-# ending symmetrically. That also kills the loop this used to need - the top run
-# depended on where the spiral stopped, which depended on the budget, which
-# depended on the run, and the best phase jumps around, so it never settled and
-# quietly left the two ends inconsistent. Rounding down spends a little less
-# cable than we have rather than a little more.
-_sp, turns, pitch = spiral_from(face_len_bot, face_len_bot)
-turns = max(1.0, math.floor(turns * 2.0) / 2.0)
-if HEIGHT > 0:
-    pitch = (HEIGHT - 2.0 * z0) / turns
-    if pitch < d + MIN_WALL:
-        raise ValueError("HEIGHT too small: need >= %.1f mm "
-                         "(or increase LENGTH/WIDTH)"
-                         % (2.0 * z0 + (d + MIN_WALL) * turns))
+
+FACE_GEO["ramp_u"] = RAMP_LENGTH
+FACE_GEO["len_of"] = run_length
+_fit = fit_runs(FACE_GEO, CABLE_LENGTH, ramp3d, CONNECTOR_ALLOWANCE, z0,
+                HEIGHT, d + MIN_WALL,
+                lambda u, sg: pick_face_run(u, sg, collect=True))
+turns, pitch, _bot, face_len_bot, _top, face_len_top, cable_used = _fit
+span_bot, arc_bot, tail_dir_bot, tail_len_bot = _bot[0], _bot[1], _bot[2], _bot[3]
+span_top, arc_top, tail_dir_top, tail_len_top = _top[0], _top[1], _top[2], _top[3]
+turn_len_bot = face_len_bot - arc_length_of(arc_bot) - tail_len_bot
+turn_len_top = face_len_top - arc_length_of(arc_top) - tail_len_top
+if HEIGHT > 0 and pitch < d + MIN_WALL:
+    raise ValueError("HEIGHT too small: need >= %.1f mm "
+                     "(or increase LENGTH/WIDTH)"
+                     % (2.0 * z0 + (d + MIN_WALL) * turns))
 H = HEIGHT if HEIGHT > 0 else 2.0 * z0 + pitch * turns
-
-span_top, arc_top, tail_dir_top, tail_len_top = pick_face_run(
-    turns * P + RAMP_LENGTH, 1.0)
-turn_len_top = face_run_length(turns * P + RAMP_LENGTH, 1.0, span_top)
-face_len_top = turn_len_top + arc_length_of(arc_top) + tail_len_top
-if abs(face_len_top - face_len_bot) > 1.0:
-    warn("the two face runs came out %.0f mm apart (%.0f / %.0f) - they should "
-         "be mirror images" % (abs(face_len_top - face_len_bot),
-                               face_len_bot, face_len_top))
 L_spiral = turns * math.hypot(P, pitch)
-cable_used = (2.0 * ramp3d + face_len_bot + face_len_top
-              + 2.0 * CONNECTOR_ALLOWANCE + L_spiral)
 if cable_used > CABLE_LENGTH + 1.0:
     warn("this design wants %.0f mm of cable, %.0f mm more than you have"
          % (cable_used, cable_used - CABLE_LENGTH))
@@ -1299,11 +1361,12 @@ if r - face_inset < 1.5 * d:
     warn("face run ends at a %.1f mm bend radius, tight for a %.1f mm cable - "
          "raise FACE_INSET's end radius or lower FACE_INSET"
          % (r - face_inset, CABLE_DIAMETER))
-log("cable: spiral %.0f + 2 x %.0f (ramp+face run+pocket) = %.0f mm of your "
-    "%.0f mm, %.0f mm spare"
+log("cable: spiral %.0f + 2 x %.0f (ramp+face run+pocket) = %.1f mm of your "
+    "%.0f mm, %.1f mm spare"
     % (turns * math.hypot(P, pitch), ramp3d + 0.5 * (face_len_bot + face_len_top)
        + CONNECTOR_ALLOWANCE, cable_used, CABLE_LENGTH,
-       CABLE_LENGTH - cable_used))
+       abs(CABLE_LENGTH - cable_used) if abs(CABLE_LENGTH - cable_used) > 0.05
+       else 0.0))
 log("pocket anchors: bottom (%.1f, %.1f, 0)  top (%.1f, %.1f, %.1f)"
     % (anchor_bot.x, anchor_bot.y, anchor_top.x, anchor_top.y, H))
 log("-> sketch your connector pocket on each face from the anchor; the "

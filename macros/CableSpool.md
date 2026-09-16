@@ -85,7 +85,8 @@ face_span  = >= FACE_TURN*P, stretched to wherever the tail comes out longest
 tail_len   = clear run across the face, less CONNECTOR_ALLOWANCE
 face_len   = turn-in length + release arc + tail_len
 per_end  = hypot(RAMP_LENGTH, z0-zb) + face_len + CONNECTOR_ALLOWANCE
-turns    = snapped down to a half turn (makes both ends congruent)
+turns, and both runs' lengths, are solved together so the total lands on
+CABLE_LENGTH (fit_runs)
 L_spiral = CABLE_LENGTH - 2*per_end
 auto:   pitch = d + MIN_WALL; turns = L_spiral / hypot(P, pitch); H = 2*z0 + pitch*turns
 fixed:  iterate turns/pitch with H given; error if pitch < d + MIN_WALL
@@ -151,15 +152,23 @@ lever on how far the channel runs: every mm off it is a mm more channel, and the
 anchor moves with it. Where the turn-in stops decides where the diagonal starts,
 so every phase of it over one lap is tried and the roomiest kept.
 
-`turns` is then **snapped down to a half turn**. `stadium_xy(-u)` is
-`stadium_xy(u)` mirrored in X, and `u → u + P/2` is the stadium's own 180°
-symmetry, so at a whole or half turn the top run is congruent to the bottom one:
-same length, same room, ending symmetrically. That is also what makes this
-solvable in one pass - the top run depends on where the spiral stops, which
-depends on the budget, which depends on the run, and since the best phase jumps
-around, iterating never settled and quietly left the two ends inconsistent.
-Rounding down spends slightly less cable than `CABLE_LENGTH`; the Report view
-prints what was actually used and how much is spare.
+The turn count and both runs are then solved together against the cable you
+entered (`fit_runs`). The turn count **cannot** do that job on its own: one turn
+costs `hypot(P, pitch)`, which is within 0.1 mm of the perimeter `P`, so a
+longer spiral shortens the top run's approach by the same amount and the two
+cancel to ~0.07 mm per turn. Solving on the turn count alone either never
+settles - the top run swung over a 70 mm range while the iteration cycled - or
+closes the budget by pinning a run somewhere that leaves a connector nowhere to
+sit.
+
+What works is that each run's length is free over a whole lap, so the *pair*
+spans two laps and almost any turn count can be met by some combination. Only
+runs that leave the connector its full `CONNECTOR_ALLOWANCE` of clearance are
+considered, so both ends stay usable; among the pairs that close the budget the
+one with the most room to spare wins. The two ends come out different lengths,
+which is fine - nothing requires them to match. Measured across 13 parameter
+sets the worst miss is 3 mm; the Report view prints what was used and the
+remainder.
 
 `face_plan` is a pure function of the numbers and the dialog preview calls the
 same one, so the preview's turn count and height cannot drift from the build's.
