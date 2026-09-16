@@ -45,8 +45,10 @@ FACE_TURN           = 0.1     # after the ramp reaches the face the groove turns
 FACE_INSET          = 0.0     # how far inward the groove moves over that run;
                               # 0 = auto (just clears the outer wall)
 FACE_DEPTH          = 0.0     # depth of face channel, 0 = groove diameter
-CONNECTOR_ALLOWANCE = 30.0    # cable+connector length (per end) that sits in
-                              # the pocket YOU will draw after the face run
+CONNECTOR_ALLOWANCE = 20.0    # clear run kept at the end of the face channel
+                              # for the connector - the channel stops this far
+                              # short of the far side and you sketch the pocket
+                              # into it. Lower it and the channel runs further.
 EDGE_FILLET         = 1.5     # top/bottom outer edge fillet, 0 = none
 SLOT_EPS            = 0.05    # face slot is this much wider than the
                               # groove, to keep its walls off the tube
@@ -170,7 +172,7 @@ DIALOG_FIELDS = [
     ("RAMP_LENGTH",         "Corridor ramp length",         5, 200,     1, 1,   " mm"),
     ("FACE_TURN",           "Face run (laps round the face)", 0, 2.0,  2, 0.05, ""),
     ("FACE_INSET",          "Face run inset (0 = auto)",    0, 100,    1, 0.5, " mm"),
-    ("CONNECTOR_ALLOWANCE", "Cable+connector in pocket (per end)", 0, 200, 1, 1, " mm"),
+    ("CONNECTOR_ALLOWANCE", "Clear space kept for the connector", 0, 200, 1, 1, " mm"),
 ]
 
 # which of the three schematics explains which parameter
@@ -1192,5 +1194,7 @@ log("cable: spiral %.0f + 2 x %.0f (ramp+face run+pocket) = %.0f mm of your "
        CABLE_LENGTH - cable_used))
 log("pocket anchors: bottom (%.1f, %.1f, 0)  top (%.1f, %.1f, %.1f)"
     % (anchor_bot.x, anchor_bot.y, anchor_top.x, anchor_top.y, H))
-log("-> sketch your connector pocket on each face starting at the anchor, "
-    "leaving about %.0f mm of cable+connector inside it" % CONNECTOR_ALLOWANCE)
+log("-> sketch your connector pocket on each face from the anchor; the "
+    "channel stops %.0f mm short of the far side to leave room for it "
+    "(lower CONNECTOR_ALLOWANCE and the channel runs further)"
+    % CONNECTOR_ALLOWANCE)

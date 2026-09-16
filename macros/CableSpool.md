@@ -60,7 +60,7 @@ derivation), so there are no image files to ship alongside the macro.
 | `FACE_INSET` | 0 | How far inward the turn-in moves; 0 = auto, which aims it at the middle of the face |
 | `SLOT_EPS` | 0.05 | Face channel oversize, keeps its walls off the swept tube |
 | `FACE_DEPTH` | 0 | Face channel depth; 0 = `d` |
-| `CONNECTOR_ALLOWANCE` | 30 | Cable+connector length per end stored in the user-drawn pocket |
+| `CONNECTOR_ALLOWANCE` | 20 | Clear run kept at the end of the channel for the connector. Lower it and the channel runs further |
 | `EDGE_FILLET` | 1.5 | Top/bottom outer edge fillet; 0 = none |
 | `SAMPLE_STEP` | 3.0 | Ramp sampling step; the spiral itself is exact geometry |
 | `USE_DIALOG` | True | Show Qt input dialog |
@@ -127,6 +127,8 @@ instead just parcels the pocket up in more channel. It stops
 `CONNECTOR_ALLOWANCE` short of the far side, so the pocket you sketch from the
 anchor has exactly that much in front of it, and the auto inset aims at a small
 end radius so the tangent points across open space rather than along the wall.
+That parameter is the one lever on how far the channel runs: every mm off it is
+a mm more channel, and the anchor moves with it.
 
 Where the turn-in stops decides how long that straight can be, so every phase of
 it over one lap is tried and the roomiest kept.
