@@ -49,7 +49,7 @@ derivation), so there are no image files to ship alongside the macro.
 | `CABLE_LENGTH` | 1500 | Total cable length incl. connectors |
 | `CABLE_DIAMETER` | 3.5 | Measured cable diameter |
 | `CLEARANCE` | 0.3 | Added to diameter → groove diameter `d` |
-| `GROOVE_DEPTH_FAC` | 0.85 | Groove depth / `d`. 0.5 = half open, >0.5 = snap-in lip, must be < 1 |
+| `GROOVE_DEPTH_FAC` | 0.85 | Groove depth / `d`. <0.5 = shallow cradle (cable sits proud), 0.5 = half open and the widest opening there is, 0.8-0.9 = undercut/snap-in. Range [0.25, 1) |
 | `MIN_WALL` | 1.2 | Rib between neighbouring turns |
 | `WIDTH` | 40 | Outer width = diameter of the round ends |
 | `LENGTH` | 75 | Outer overall length (≥ WIDTH; equal → cylinder) |
@@ -218,11 +218,16 @@ comes back valid, since it can quietly wreck the solid.
 
 ## Printing notes
 
-With `GROOVE_DEPTH_FAC` > 0.5 the groove is undercut, so its opening at the
-surface is narrower than Ø`d` and the rib you see between turns is wider than
-`MIN_WALL` (`MIN_WALL` is the true minimum, and it sits below the surface). The
-macro prints all three numbers each run; lower `GROOVE_DEPTH_FAC` for a wider
-opening and tighter looking coils.
+The groove's opening at the surface is widest at `GROOVE_DEPTH_FAC` 0.5, where
+it equals Ø`d`, and narrows either side: above, because the groove is undercut
+and curves back over it; below, because it is a shallow scallop that never
+reaches full width. Either way the rib you see between turns is then wider than
+`MIN_WALL` - which is the true minimum, and sits below the surface. The macro
+prints all three numbers each run; move `GROOVE_DEPTH_FAC` toward 0.5 for a
+wider opening and tighter looking coils.
+
+Measured on the default spool: 0.25 → 3.29 mm opening, 0.5 → 3.80, 0.85 → 2.71,
+0.95 → 1.66.
 
 Print standing on one of the flat faces. The groove is then a sequence of
 horizontal-ish overhangs; with the snap-in lip (`GROOVE_DEPTH_FAC` > 0.5)
