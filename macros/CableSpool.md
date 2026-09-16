@@ -56,8 +56,8 @@ derivation), so there are no image files to ship alongside the macro.
 | `HEIGHT` | 0 | 0 = auto from cable; >0 = fixed height, pitch adapts |
 | `END_MARGIN` | 0 | Face → centre of first/last turn; 0 = auto |
 | `RAMP_LENGTH` | 25 | Perimeter length used by the corridor to climb to a face |
-| `FACE_TURN` | 0.5 | *Minimum* laps the run takes; it then carries on to the next middle-of-a-straight. 0 = stop at the wall |
-| `FACE_INSET` | 0 | How far inward it moves over that run; 0 = auto, which aims it at the middle of the face |
+| `FACE_TURN` | 0.1 | *Minimum* laps of turn-in; it is stretched past this to wherever the straight that follows comes out longest. 0 = stop at the wall |
+| `FACE_INSET` | 0 | How far inward the turn-in moves; 0 = auto, which aims it at the middle of the face |
 | `SLOT_EPS` | 0.05 | Face channel oversize, keeps its walls off the swept tube |
 | `FACE_DEPTH` | 0 | Face channel depth; 0 = `d` |
 | `CONNECTOR_ALLOWANCE` | 30 | Cable+connector length per end stored in the user-drawn pocket |
@@ -78,10 +78,11 @@ P      = 4*S + 2*pi*r                        centre-line perimeter per turn
 zb     = face_depth - R                      centre z of bottom face channel
 z0     = END_MARGIN or face_depth + MIN_WALL + R
 face_inset = FACE_INSET or r - max(2*d, R + MIN_WALL + 0.5)
-face_span  = >= FACE_TURN*P, then on to the next middle-of-a-straight
-face_len   = sampled length of that run    (needs only r, S, P, face_inset)
+face_span  = >= FACE_TURN*P, stretched to wherever the tail comes out longest
+tail_len   = clear run across the face, less CONNECTOR_ALLOWANCE
+face_len   = turn-in length + tail_len
 per_end  = hypot(RAMP_LENGTH, z0-zb) + face_len + CONNECTOR_ALLOWANCE
-turns    = snapped down so the TOP run also ends on a middle-of-a-straight
+turns    = snapped down to a half turn (makes both ends congruent)
 L_spiral = CABLE_LENGTH - 2*per_end
 auto:   pitch = d + MIN_WALL; turns = L_spiral / hypot(P, pitch); H = 2*z0 + pitch*turns
 fixed:  iterate turns/pitch with H given; error if pitch < d + MIN_WALL
@@ -114,23 +115,36 @@ with a *larger* volume than it started with and a sealed void inside the part.
 The channel is `SLOT_EPS` oversize and overlaps the end of the tube, so there
 the tube sits strictly inside it - a clean crossing instead of a tangency - and
 it is built in overlapping chunks and fused, because as a single polygon the
-ribbon self-intersects once the run laps back over itself.
+ribbon self-intersects once the run laps back over itself. The straight tail is
+its own prism for the same reason: folded into the turn-in's point list it
+shares a chunk with it, and since it cuts across the middle it can cross the
+spiral there, which is enough to get the whole boolean refused.
 
-Where the run **ends** matters as much as how far in it goes: the auto inset
-aims at a small end radius, because the offset stadium collapses toward the
-centre segment as the inset grows, and the run is stretched to finish at the
-middle of a straight side. So it ends pointing along the long axis, in the
-middle of the face - which is where a connector wants to lie.
+After the turn-in the run **leaves the perimeter** and carries straight on along
+the tangent it already has, cutting across the open face (`face_plan`). That
+straight is what gives the connector room - wrapping on round the outline
+instead just parcels the pocket up in more channel. It stops
+`CONNECTOR_ALLOWANCE` short of the far side, so the pocket you sketch from the
+anchor has exactly that much in front of it, and the auto inset aims at a small
+end radius so the tangent points across open space rather than along the wall.
 
-For the top end that phase depends on where the spiral stops, so the turn count
-is **snapped down** until the top run lands there too. Letting the turns float
-and stretching the top run instead does not settle: a longer top run changes the
-budget, which moves where the spiral ends, which changes the run again. Snapping
-means the build uses a little less cable than `CABLE_LENGTH`; the Report view
-prints what it actually used and how much is spare. With a fixed `HEIGHT` the
-turns are not ours to round, so there the top run is stretched instead.
+Where the turn-in stops decides how long that straight can be, so every phase of
+it over one lap is tried and the roomiest kept.
 
-Anchors = the inner end of each face run, on the face (z = 0 / H).
+`turns` is then **snapped down to a half turn**. `stadium_xy(-u)` is
+`stadium_xy(u)` mirrored in X, and `u → u + P/2` is the stadium's own 180°
+symmetry, so at a whole or half turn the top run is congruent to the bottom one:
+same length, same room, ending symmetrically. That is also what makes this
+solvable in one pass - the top run depends on where the spiral stops, which
+depends on the budget, which depends on the run, and since the best phase jumps
+around, iterating never settled and quietly left the two ends inconsistent.
+Rounding down spends slightly less cable than `CABLE_LENGTH`; the Report view
+prints what was actually used and how much is spare.
+
+`face_plan` is a pure function of the numbers and the dialog preview calls the
+same one, so the preview's turn count and height cannot drift from the build's.
+
+Anchors = the far end of each face run (turn-in + straight), on the face.
 
 Body: stadium wire → face → extrude, fillet top/bottom edges, then cut the
 groove, then each face channel as a single fused tool (see Known issues for why
