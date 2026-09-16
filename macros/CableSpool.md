@@ -14,19 +14,20 @@ body and both connectors are stored flush in the top/bottom faces.
 
 | File | Purpose |
 |---|---|
-| `CableSpool.FCMacro` | The macro (Python, runs inside FreeCAD) |
-| `README.md` | This document |
+| `CableSpool.fcmacro` | The macro (Python, runs inside FreeCAD) |
+| `CableSpool.md` | This document |
 
 ## Usage
 
-1. Copy `CableSpool.FCMacro` to your FreeCAD macro folder
+1. Copy `CableSpool.fcmacro` to your FreeCAD macro folder
    (Macro → Macros… shows the path) or open it directly.
 2. Run it. A dialog asks for the parameters (values are remembered between runs).
    Clicking a field draws what that parameter means, to scale, from the values
    currently in the dialog - a wall cross-section (cable, clearance, groove
-   depth, wall/pitch), a top view (outline, ramp, corner bend, face channel,
-   pocket) or a side view (height, end margin, turns). A line under the drawing
-   shows the resulting groove Ø, pitch, turn count and height before you build.
+   depth, wall/pitch), a top view (outline, ramp, face run, anchor and the
+   connector pocket) or a side view (height, end margin, turns). A line under
+   the drawing shows the resulting groove Ø, pitch, turn count and height before
+   you build, and a red line says when the connector pocket does not fit.
 3. The macro creates:
    - `CableSpool` – PartDesign Body whose BaseFeature is the generated shape
    - `CableSpool_Base` – the generated Part shape (inside the Body)
@@ -195,48 +196,50 @@ comes back valid, since it can quietly wreck the solid.
 
 ## Status
 
-- Runs headlessly (`FreeCADCmd`) and in-app; verified across several parameter
-  sets (default, cylinder body, fixed height, no fillet / half-open groove,
-  thick cable, short cable) - each produces a single valid solid.
-- Targets FreeCAD 0.20 / 0.21 / 1.0 (PySide6 → PySide2 → PySide fallback).
+- Runs headlessly (`FreeCADCmd`) and in the GUI (FreeCAD 26.3 / 1.1dev weekly);
+  every change was checked across a matrix of parameter sets (default, cylinder
+  body, fixed height, thick cable, shallow and deep grooves, face run off,
+  out-of-range values) - each builds a single valid solid or fails with a
+  message.
+- Spends the entered `CABLE_LENGTH` to within a few mm (`fit_runs`); the Report
+  view prints what was used and the remainder.
+- Both connector pockets are checked against the channel already on the face,
+  the outer edge and - when `CONNECTOR_DEPTH` is set - the solid core. Verified
+  against the solid itself (sampling the pocket strip with `isInside`): the
+  reported maximum pocket length matches reality, about 2 mm on the safe side.
+- The dialog preview calls the same planner as the build, so its turn count and
+  height match exactly (~80 ms per repaint).
+- Targets FreeCAD 0.20 / 0.21 / 1.0+ (PySide6 → PySide2 → PySide fallback).
 
 ## Known issues / TODO
 
-- [x] ~~Face channel meets the ramp with a sharp 90° turn in plan view.~~
-      Fixed twice: first by rounding the corner with a `BEND_RADIUS` arc, then
-      properly by dropping the corner altogether - the groove now continues
-      round the face and tightens inward, as on the commercial winders this is
-      modelled on. `FACE_TURN`/`FACE_INSET` replace `BEND_RADIUS` and
-      `FACE_CHANNEL_LEN`. Guarded so a run that laps back over itself, or one
-      inset deeper than the spool allows, fails with a message instead of
-      quietly eating the part.
-- [x] ~~Test in FreeCAD; verify sweep validity and boolean speed for long cables.~~
-      Fixed: a BSpline-interpolated spine made `makePipeShell` raise
-      `BRepOffsetAPI_MakePipeShell::MakeSolid` on this OCC build (reproduced
-      headlessly on FreeCAD 26.3.0 / 1.1dev weekly). The centre-line is now
-      built from exact line/helix edges instead of a sampled+interpolated
-      BSpline, which sweeps reliably. Also: cutting the groove fused with the
-      face channels in one boolean op could yield an invalid/multi-solid
-      result (tool self-touches near the ramps); the macro now cuts the
-      groove first, then each face channel as its own fused tool.
-- [ ] Optional: generate a default USB-C pocket (parameters: plug width/thickness/length)
-      instead of leaving it fully manual.
-- [ ] Optional: drive parameters from a FreeCAD Spreadsheet so the model is
-      recomputable without re-running the macro (or convert to a FeaturePython object).
+- [x] ~~Face channel meets the ramp with a sharp 90° turn.~~ The groove now
+      turns in along the face, is swung onto a diagonal by a `FACE_BEND` arc
+      and runs straight out, with the exit angle chosen for the longest clear
+      corridor for the connector.
+- [x] ~~Sweep fails (`BRepOffsetAPI_MakePipeShell::MakeSolid`).~~ The spine is
+      built from exact line/helix edges instead of an interpolated BSpline.
+- [x] ~~Face channel cuts through the rim / breaks into the first turn.~~ The
+      inward move is bounded (`face_trans`) and the roof over the channel has
+      its own `FACE_CLEAR`.
+- [x] ~~Validate that the connector pocket fits.~~ Length, width and depth are
+      dialog fields; the fit is enforced and reported.
+- [x] ~~Cable length left 0-94 mm unused.~~ Solved together with both runs.
+- [ ] Generating the connector pocket itself - deliberately left to the user,
+      who cuts it with their own tolerances from the `Anchor_*` points.
+- [ ] Drive parameters from a Spreadsheet / FeaturePython so the model is
+      recomputable without re-running the macro.
 - [ ] Re-running creates duplicate objects – add cleanup/update of existing objects.
-- [ ] Cancelling the dialog raises `Cancelled` (shows as an error in the Report view) –
-      handle it gracefully.
-- [ ] Validate that the face run plus the pocket you draw actually fit on the
-      face (the run itself is checked, the pocket is not).
-- [ ] The dialog diagrams cover every parameter except `FACE_DEPTH`,
-      `EDGE_FILLET`, `END_MARGIN` and `SAMPLE_STEP`, which are file constants
-      rather than dialog fields.
+- [ ] Cancelling the dialog raises `Cancelled` (shows as an error in the Report
+      view) – handle it gracefully.
+- [ ] `FACE_DEPTH`, `EDGE_FILLET`, `END_MARGIN`, `SAMPLE_STEP`,
+      `FACE_EXIT_ANGLE`, `FACE_BEND` and `SLOT_EPS` are file constants, not
+      dialog fields.
 - [ ] Meshing the result (`MeshPart`/`tessellate`) reports a non-closed,
       self-intersecting mesh even though the BRep is a valid closed single
-      solid. Pre-existing (same with `FACE_TURN = 0`); check before relying on
-      a direct STL export for printing.
-- [ ] Headless test script (`FreeCADCmd`) that builds several parameter sets and
-      checks `shape.isValid()`, volume and bounding box.
+      solid; check before relying on a direct STL export for printing.
+- [ ] A committed headless test script - the parameter matrix above was run
+      ad hoc for each change.
 
 ## Printing notes
 
