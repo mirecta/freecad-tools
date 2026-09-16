@@ -181,19 +181,16 @@ def face_plan(geo, u_start, sgn, spans=None, collect=False):
     def outside(x, y):
         return math.hypot(x - max(-S, min(S, x)), y) > lim
 
+    # channel centre-line to the side of a pocket, and the outer limit a
+    # pocket side may reach (wall rib plus the edge fillet)
+    edge = geo["R"] + SLOT_EPS + geo["MIN_WALL"]
+    lim_pocket = geo["WIDTH"] / 2.0 - max(geo["MIN_WALL"], 0.8) - EDGE_FILLET
+
+    def pocket_out(x, y):
+        dd = math.hypot(x - max(-S, min(S, x)), y)
+        return dd > lim_pocket or (core is not None and dd > core)
+
     def try_run(span, laid, ex, ey, dx, dy, deg):
-        def blocked(x, y):
-            if outside(x, y):
-                return True
-            return any((x - px) ** 2 + (y - py) ** 2 < clear * clear
-                       for px, py in laid)
-
-        def pocket_blocked(x, y):
-            if core is not None and math.hypot(
-                    x - max(-S, min(S, x)), y) > core:
-                return True
-            return blocked(x, y)
-
         a = math.radians(deg)
         tx = math.cos(a) * (1.0 if ex <= 0 else -1.0)
         ty = math.sin(a) * (1.0 if ey <= 0 else -1.0)
@@ -207,28 +204,49 @@ def face_plan(geo, u_start, sgn, spans=None, collect=False):
                 cw, sw = math.cos(w), math.sin(w)
                 rx, ry = ex - cx, ey - cy
                 px, py = cx + rx * cw - ry * sw, cy + rx * sw + ry * cw
-                if blocked(px, py):
+                if outside(px, py) or any(
+                        (px - qx) ** 2 + (py - qy) ** 2 < clear * clear
+                        for qx, qy in laid):
                     return None
                 pts.append((px, py))
-        # how far a corridor CONNECTOR_WIDTH wide stays clear
+        # How long a corridor CONNECTOR_WIDTH wide stays clear. The channel
+        # already laid on this face is what normally ends it, so test it in
+        # the corridor's own frame: any centre-line point that sits within
+        # half + edge sideways caps the length at its distance ahead. It used to
+        # be sampled at 14 points over the whole run, and the corridor slipped
+        # between them straight through the channel.
         px, py = pts[-1]
         nx, ny = -ty, tx
-        run = 0.0
-        while run < 2.0 * (geo["LENGTH"] + geo["WIDTH"]):
-            cx, cy = px + tx * (run + 3.0), py + ty * (run + 3.0)
-            if (pocket_blocked(cx, cy)
-                    or pocket_blocked(cx + nx * half, cy + ny * half)
-                    or pocket_blocked(cx - nx * half, cy - ny * half)):
+        limit = 2.0 * (geo["LENGTH"] + geo["WIDTH"])
+        for qx, qy in laid:
+            ahead = (qx - px) * tx + (qy - py) * ty
+            side = abs((qx - px) * nx + (qy - py) * ny)
+            if ahead > 0.0 and side < half + edge:
+                limit = min(limit, ahead - edge)
+        run, step = 0.0, 1.5
+        while run + step <= limit:
+            t = run + step
+            cx, cy = px + tx * t, py + ty * t
+            if (pocket_out(cx, cy) or pocket_out(cx + nx * half, cy + ny * half)
+                    or pocket_out(cx - nx * half, cy - ny * half)):
                 break
-            run += 3.0
-        return pts, (tx, ty), run, bend * abs(theta)
+            run = t
+        return pts, (tx, ty), max(0.0, run), bend * abs(theta)
 
     best, steps, seen = None, 40, []
     for span in (spans if spans is not None
                  else [base + P * i / steps for i in range(steps + 1)]):
-        laid = [face_stadium_pt(geo, u_start + sgn * j / 16.0 * span,
-                                j / 16.0, span)
-                for j in range(14)]        # the run so far, minus its own tip
+        # Everything already cut into this face, densely: the part of the ramp
+        # that still reaches the face, and the turn-in up to a short way
+        # before the exit (that last bit is the corridor's own tail).
+        m = max(16, int(span / 1.5))
+        excl = half + edge + 1.5
+        laid = [face_stadium_pt(geo, u_start + sgn * j / float(m) * span,
+                                j / float(m), span)
+                for j in range(m + 1) if (1.0 - j / float(m)) * span > excl]
+        ramp = geo.get("ramp_u", 0.0)
+        laid += [face_stadium_pt(geo, u_start - sgn * k * 1.5, 0.0, span)
+                 for k in range(1, int(0.5 * ramp / 1.5) + 1)]
         ex, ey = face_stadium_pt(geo, u_start + sgn * span, 1.0, span)
         bx, by = face_stadium_pt(geo, u_start + sgn * span * (1 - 1e-4),
                                  1.0 - 1e-4, span)
