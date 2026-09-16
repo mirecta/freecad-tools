@@ -58,6 +58,8 @@ derivation), so there are no image files to ship alongside the macro.
 | `RAMP_LENGTH` | 25 | Perimeter length used by the corridor to climb to a face |
 | `FACE_TURN` | 0.1 | *Minimum* laps of turn-in; it is stretched past this to wherever the straight that follows comes out longest. 0 = stop at the wall |
 | `FACE_INSET` | 0 | How far inward the turn-in moves; 0 = auto, which aims it at the middle of the face |
+| `FACE_EXIT_ANGLE` | 35 | Angle off the long axis the face channel leaves at |
+| `FACE_BEND` | 12 | Radius of the arc that swings it onto that heading |
 | `SLOT_EPS` | 0.05 | Face channel oversize, keeps its walls off the swept tube |
 | `FACE_DEPTH` | 0 | Face channel depth; 0 = `d` |
 | `CONNECTOR_ALLOWANCE` | 20 | Clear run kept at the end of the channel for the connector. Lower it and the channel runs further |
@@ -80,7 +82,7 @@ z0     = END_MARGIN or face_depth + MIN_WALL + R
 face_inset = FACE_INSET or r - max(2*d, R + MIN_WALL + 0.5)
 face_span  = >= FACE_TURN*P, stretched to wherever the tail comes out longest
 tail_len   = clear run across the face, less CONNECTOR_ALLOWANCE
-face_len   = turn-in length + tail_len
+face_len   = turn-in length + release arc + tail_len
 per_end  = hypot(RAMP_LENGTH, z0-zb) + face_len + CONNECTOR_ALLOWANCE
 turns    = snapped down to a half turn (makes both ends congruent)
 L_spiral = CABLE_LENGTH - 2*per_end
@@ -115,23 +117,33 @@ with a *larger* volume than it started with and a sealed void inside the part.
 The channel is `SLOT_EPS` oversize and overlaps the end of the tube, so there
 the tube sits strictly inside it - a clean crossing instead of a tangency - and
 it is built in overlapping chunks and fused, because as a single polygon the
-ribbon self-intersects once the run laps back over itself. The straight tail is
-its own prism for the same reason: folded into the turn-in's point list it
-shares a chunk with it, and since it cuts across the middle it can cross the
-spiral there, which is enough to get the whole boolean refused.
+ribbon self-intersects once the run laps back over itself. The release arc and
+straight are built separately from the turn-in for the same reason: they cut
+back across the middle, so sharing a chunk can put a crossing inside one
+polygon. They are also resampled to even spacing first - the arc samples sit
+~1 mm apart and the straight arrives as one long jump, and the ribbon normal at
+that join averages two very different directions and twists the quad. The
+turn-in is oriented so the end the arc hangs off comes first, because the two
+ends are walked in opposite directions and otherwise the tail is stitched to the
+ramp end and the ribbon jumps clean across the part.
 
-After the turn-in the run **leaves the perimeter** and carries straight on along
-the tangent it already has, cutting across the open face (`face_plan`). That
-straight is what gives the connector room - wrapping on round the outline
-instead just parcels the pocket up in more channel. It stops
-`CONNECTOR_ALLOWANCE` short of the far side, so the pocket you sketch from the
-anchor has exactly that much in front of it, and the auto inset aims at a small
-end radius so the tangent points across open space rather than along the wall.
-That parameter is the one lever on how far the channel runs: every mm off it is
-a mm more channel, and the anchor moves with it.
+After the turn-in the run is swung by a `FACE_BEND` arc onto a diagonal
+(`FACE_EXIT_ANGLE` off the long axis) and then runs straight across the open
+face (`face_plan`). That straight is what gives the connector room - wrapping on
+round the outline instead just parcels the pocket up in more channel.
 
-Where the turn-in stops decides how long that straight can be, so every phase of
-it over one lap is tried and the roomiest kept.
+The release arc is not optional: a tangent to the turn-in points *along* the
+perimeter, so simply carrying on straight meets the wall within a dozen mm. And
+running down the long axis instead, which reaches furthest, leaves the straight
+lying in a lane with the channel beside it - so the clear run is measured with a
+groove's spacing of clearance from the rest of the run, not just to the outer
+wall.
+
+It stops `CONNECTOR_ALLOWANCE` short of the far side, so the pocket you sketch
+from the anchor has exactly that much in front of it. That parameter is the one
+lever on how far the channel runs: every mm off it is a mm more channel, and the
+anchor moves with it. Where the turn-in stops decides where the diagonal starts,
+so every phase of it over one lap is tried and the roomiest kept.
 
 `turns` is then **snapped down to a half turn**. `stadium_xy(-u)` is
 `stadium_xy(u)` mirrored in X, and `u → u + P/2` is the stadium's own 180°

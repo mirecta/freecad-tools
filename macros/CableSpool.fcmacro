@@ -69,6 +69,16 @@ def warn(msg):
     App.Console.PrintWarning("[CableSpool] " + msg + "\n")
 
 
+# The face channel leaves at this angle off the long axis. Straight down the
+# axis reaches furthest, but it then lies in a lane with the channel alongside
+# it; a diagonal puts the connector out in the open. The channel cannot simply
+# run on along its tangent to get there - a tangent to the turn-in points along
+# the perimeter, so it meets the wall within a dozen mm - so it is swung round
+# onto this heading by a release arc first.
+FACE_EXIT_ANGLE = 35.0
+FACE_BEND = 12.0                        # radius of that release arc
+
+
 def face_stadium_pt(geo, u, t):
     """point on the inward-turning face path, t = 0 at the ramp, 1 at the end"""
     S, r, P, inset = geo["S"], geo["r"], geo["P"], geo["inset"]
@@ -110,52 +120,88 @@ def face_plan(geo, u_start, sgn):
     """Where a face run goes, as a pure function of the numbers - the dialog
     preview and the build both call this, so they cannot drift apart.
 
-    The run turns inward for at least FACE_TURN laps and then strikes out
-    straight across the open face, carrying on along the tangent it already has.
-    That straight is what gives the connector room; wrapping on round the
-    outline instead just parcels the pocket up in more channel. Where the
-    turn-in stops decides how long the straight can be, so every phase of it
-    over one lap is tried and the roomiest kept (ties to the shortest turn-in,
-    which spends least cable getting there). The straight stops `allow` short of
-    the far side, so the pocket you sketch from the anchor has that much ahead.
+    The run turns inward along the perimeter, is then swung by a FACE_BEND arc
+    onto a diagonal heading, and finally runs straight across the open face.
+    That straight is the connector's room; wrapping on round the outline instead
+    just parcels the pocket up in more channel, and simply carrying on along the
+    tangent does not work either - a tangent to the turn-in runs along the
+    perimeter and meets the wall within a dozen mm.
 
-    Returns (span, (dx, dy), tail_len)."""
-    S, r, P, R = geo["S"], geo["r"], geo["P"], geo["R"]
-    inset, lim = geo["inset"], geo["WIDTH"] / 2.0 - geo["R"] - geo["MIN_WALL"]
-    base = geo["turn"] * P
+    Where the turn-in stops decides where the diagonal starts, so every phase of
+    it over one lap is tried and the roomiest kept. The straight stops `allow`
+    short of the far side, so the pocket you sketch from the anchor has that
+    much ahead.
+
+    Returns (span, arc_pts, (dx, dy), tail_len); arc_pts walks the release arc
+    from the end of the turn-in to where the straight begins."""
+    S, r, P = geo["S"], geo["r"], geo["P"]
+    lim = geo["WIDTH"] / 2.0 - geo["R"] - geo["MIN_WALL"]
+    base, bend = geo["turn"] * P, geo["bend"]
     if base <= 0:
-        return base, (0.0, 0.0), 0.0
-
-    def pt(span, t):
-        return face_stadium_pt(geo, u_start + sgn * t * span, t)
+        return base, [], (0.0, 0.0), 0.0
 
     def outside(x, y):
         return math.hypot(x - max(-S, min(S, x)), y) > lim
 
-    def room(span):
-        ex, ey = pt(span, 1.0)
-        bx, by = pt(span, 1.0 - 1e-4)
+    clear = geo["d"] + geo["MIN_WALL"]      # channel-to-channel spacing
+
+    def attempt(span):
+        # the run so far, to keep the straight from cutting back alongside it
+        laid = [face_stadium_pt(geo, u_start + sgn * i / 24.0 * span, i / 24.0)
+                for i in range(25)]
+
+        def blocked(x, y):
+            if outside(x, y):
+                return True
+            return any((x - px) ** 2 + (y - py) ** 2 < clear * clear
+                       for px, py in laid[:-3])
+
+        ex, ey = face_stadium_pt(geo, u_start + sgn * span, 1.0)
+        bx, by = face_stadium_pt(geo, u_start + sgn * (span - 1e-4 * span), 1.0 - 1e-4)
         dx, dy = ex - bx, ey - by
         n = math.hypot(dx, dy)
         if n < 1e-9 or outside(ex, ey):
-            return (0.0, 0.0), 0.0
+            return None
         dx, dy = dx / n, dy / n
+        # head for the far end of the body, and away from the nearer long wall
+        a = math.radians(FACE_EXIT_ANGLE)
+        tx = math.cos(a) * (1.0 if ex <= 0 else -1.0)
+        ty = math.sin(a) * (1.0 if ey <= 0 else -1.0)
+        theta = math.atan2(dx * ty - dy * tx, dx * tx + dy * ty)
+        pts = [(ex, ey)]
+        if bend > 1e-6 and abs(theta) > 1e-4:
+            nx, ny = (-dy, dx) if theta > 0 else (dy, -dx)
+            cx, cy = ex + bend * nx, ey + bend * ny
+            for i in range(1, 13):
+                w = theta * i / 12.0
+                cw, sw = math.cos(w), math.sin(w)
+                rx, ry = ex - cx, ey - cy
+                px, py = cx + rx * cw - ry * sw, cy + rx * sw + ry * cw
+                if blocked(px, py):
+                    return None
+                pts.append((px, py))
+        px, py = pts[-1]
         lo, hi = 0.0, 0.0
         while hi < 2.0 * (geo["LENGTH"] + geo["WIDTH"]) \
-                and not outside(ex + dx * hi, ey + dy * hi):
-            lo, hi = hi, hi + 0.5
-        for _ in range(30):
+                and not blocked(px + tx * hi, py + ty * hi):
+            lo, hi = hi, hi + 1.0
+        for _ in range(20):
             mid = 0.5 * (lo + hi)
-            lo, hi = (lo, mid) if outside(ex + dx * mid, ey + dy * mid) else (mid, hi)
-        return (dx, dy), lo
+            lo, hi = (lo, mid) if blocked(px + tx * mid, py + ty * mid) else (mid, hi)
+        return pts, (tx, ty), lo, bend * abs(theta)
 
-    best, steps = None, 180
+    best, steps = None, 90
     for i in range(steps + 1):
         span = base + P * i / steps
-        dirn, free = room(span)
-        if best is None or free > best[2] + 2.0:
-            best = (span, dirn, free)
-    return best[0], best[1], max(0.0, best[2] - geo["allow"])
+        got = attempt(span)
+        if got is None:
+            continue
+        pts, dirn, free, arc_len = got
+        if best is None or free > best[3] + 2.0:
+            best = (span, pts, dirn, free, arc_len)
+    if best is None:
+        return base, [], (0.0, 0.0), 0.0
+    return best[0], best[1], best[2], max(0.0, best[3] - geo["allow"])
 
 
 # ---------------------------------------------------------------- input dialog
@@ -229,12 +275,17 @@ def preview_geometry(v):
         pitch = d + v["MIN_WALL"]
         # the build's own planner, so the preview cannot drift from it
         inset = (v["FACE_INSET"] if v["FACE_INSET"] > 0
-                 else max(0.0, r - max(2.0 * d, R + v["MIN_WALL"] + 0.5)))
+                 else max(0.0, r - max(3.0 * d, R + v["MIN_WALL"] + 0.5)))
         geo = dict(S=S, r=r, P=P, R=R, MIN_WALL=v["MIN_WALL"],
                    WIDTH=v["WIDTH"], LENGTH=v["LENGTH"], inset=inset,
-                   turn=v["FACE_TURN"], allow=v["CONNECTOR_ALLOWANCE"])
-        span, tail_dir, tail_len = face_plan(geo, -v["RAMP_LENGTH"], -1.0)
-        face_len = face_turn_length(geo, -v["RAMP_LENGTH"], -1.0, span) + tail_len
+                   turn=v["FACE_TURN"], allow=v["CONNECTOR_ALLOWANCE"],
+                   bend=FACE_BEND, d=d)
+        span, arc_pts, tail_dir, tail_len = face_plan(geo, -v["RAMP_LENGTH"], -1.0)
+        arc_len = sum(math.hypot(arc_pts[i + 1][0] - arc_pts[i][0],
+                                 arc_pts[i + 1][1] - arc_pts[i][1])
+                      for i in range(len(arc_pts) - 1))
+        face_len = (face_turn_length(geo, -v["RAMP_LENGTH"], -1.0, span)
+                    + arc_len + tail_len)
         ramp3d = math.hypot(v["RAMP_LENGTH"], z0 - zb)
         # both face runs are congruent at a half turn, so no loop is needed
         spiral = v["CABLE_LENGTH"] - 2.0 * (ramp3d + face_len
@@ -254,7 +305,7 @@ def preview_geometry(v):
         return dict(d=d, R=R, depth=depth, r=r, S=S, P=P, pitch=pitch,
                     z0=z0, zb=zb, turns=turns, H=H, per_end=per_end,
                     inset=inset, face_len=face_len, span=span,
-                    tail_dir=tail_dir, tail_len=tail_len,
+                    arc_pts=arc_pts, tail_dir=tail_dir, tail_len=tail_len,
                     open_w=2.0 * math.sqrt(max(R * R - (depth - R) ** 2, 0.0)))
     except Exception:
         return None
@@ -766,7 +817,7 @@ ramp3d = math.hypot(RAMP_LENGTH, z0 - zb)
 # the offset stadium collapses toward the centre segment as the inset grows, so
 # a small end radius is what delivers the cable - and the connector pocket you
 # draw off it - into the middle. Floor it at a radius the cable can still take.
-face_end_r = max(2.0 * d, R + MIN_WALL + 0.5)
+face_end_r = max(3.0 * d, R + MIN_WALL + 0.5)
 face_inset = FACE_INSET if FACE_INSET > 0 else max(0.0, r - face_end_r)
 if FACE_TURN > 0 and r - face_inset <= R + MIN_WALL:
     raise ValueError("FACE_INSET %.1f mm is too deep for this spool "
@@ -801,7 +852,8 @@ def pick_face_run(u_start, sgn):
     """see face_plan; this is the build's call into it"""
     return face_plan(dict(S=S, r=r, P=P, R=R, MIN_WALL=MIN_WALL, WIDTH=WIDTH,
                           LENGTH=LENGTH, inset=face_inset, turn=FACE_TURN,
-                          allow=CONNECTOR_ALLOWANCE), u_start, sgn)
+                          allow=CONNECTOR_ALLOWANCE, bend=FACE_BEND, d=d),
+                     u_start, sgn)
 
 
 def spiral_from(len_bot, len_top):
@@ -819,9 +871,14 @@ def spiral_from(len_bot, len_top):
     return spiral, t, max(pit, d + MIN_WALL)
 
 
-span_bot, tail_dir_bot, tail_len_bot = pick_face_run(-RAMP_LENGTH, -1.0)
+def arc_length_of(pts):
+    return sum(math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1])
+               for i in range(len(pts) - 1))
+
+
+span_bot, arc_bot, tail_dir_bot, tail_len_bot = pick_face_run(-RAMP_LENGTH, -1.0)
 turn_len_bot = face_run_length(-RAMP_LENGTH, -1.0, span_bot)
-face_len_bot = turn_len_bot + tail_len_bot
+face_len_bot = turn_len_bot + arc_length_of(arc_bot) + tail_len_bot
 
 # Snap the turn count to a half turn. stadium_xy(-u) is stadium_xy(u) mirrored
 # in X, and u -> u + P/2 is the stadium's own 180 deg symmetry, so at a whole or
@@ -841,9 +898,10 @@ if HEIGHT > 0:
                          % (2.0 * z0 + (d + MIN_WALL) * turns))
 H = HEIGHT if HEIGHT > 0 else 2.0 * z0 + pitch * turns
 
-span_top, tail_dir_top, tail_len_top = pick_face_run(turns * P + RAMP_LENGTH, 1.0)
+span_top, arc_top, tail_dir_top, tail_len_top = pick_face_run(
+    turns * P + RAMP_LENGTH, 1.0)
 turn_len_top = face_run_length(turns * P + RAMP_LENGTH, 1.0, span_top)
-face_len_top = turn_len_top + tail_len_top
+face_len_top = turn_len_top + arc_length_of(arc_top) + tail_len_top
 if abs(face_len_top - face_len_bot) > 1.0:
     warn("the two face runs came out %.0f mm apart (%.0f / %.0f) - they should "
          "be mirror images" % (abs(face_len_top - face_len_bot),
@@ -1011,7 +1069,7 @@ def sweep_circle(spine):
     return parts[0].fuse(parts[1:])
 
 
-def face_slot(ua, ub, zc, top, tail_dir=None, tail_len=0.0):
+def face_slot(ua, ub, zc, top, arc_pts=(), tail_dir=None, tail_len=0.0):
     """The face run, as one prismatic channel following the path.
 
     The swept tube stops where the ramp reaches the face; from there the groove
@@ -1024,41 +1082,74 @@ def face_slot(ua, ub, zc, top, tail_dir=None, tail_len=0.0):
     The channel is a hair oversize (SLOT_EPS) and overlaps the end of the tube,
     so at the junction the tube is strictly inside it - a clean crossing rather
     than a tangency. It is built in overlapping chunks and fused, because as a
-    single polygon the ribbon self-intersects once the run laps over itself.
+    single polygon the ribbon self-intersects once the run laps over itself, and
+    the release arc plus the straight are built separately from the turn-in for
+    the same reason: they cut back across the middle, so sharing a chunk with
+    the turn-in can put a crossing inside one polygon.
     """
     hw = R + SLOT_EPS
     lo = (zc - R - SLOT_EPS) if top else -1.0
     hi = (H + 1.0) if top else (zc + R + SLOT_EPS)
+    up = V(0, 0, hi - lo)
+
+    def ribbon(flat, step=24):
+        """prisms along a list of (x, y), in overlapping chunks"""
+        out, n = [], len(flat)
+        edge = []
+        for i, (x, y) in enumerate(flat):
+            px, py = flat[max(0, i - 1)]
+            qx, qy = flat[min(n - 1, i + 1)]
+            dx, dy = qx - px, qy - py
+            m = math.hypot(dx, dy) or 1.0
+            nx, ny = -dy / m, dx / m
+            edge.append((V(x + nx * hw, y + ny * hw, lo),
+                         V(x - nx * hw, y - ny * hw, lo)))
+        for i in range(0, max(1, n - 1), step):
+            seg = edge[i:min(i + step + 2, n)]
+            if len(seg) < 2:
+                continue
+            ring = [q[1] for q in seg] + [q[0] for q in reversed(seg)]
+            out.append(Part.Face(Part.makePolygon(ring + [ring[0]])).extrude(up))
+        return out
+
     n = max(12, int(math.ceil(abs(ub - ua) / 1.5)))
-    pts = []
+    turn = []
     for i in range(n + 1):
         q = path_point(ua + (ub - ua) * i / n)
-        nx, ny = inward_dir(q.x, q.y)
-        pts.append((V(q.x + nx * hw, q.y + ny * hw, lo),
-                    V(q.x - nx * hw, q.y - ny * hw, lo)))
+        turn.append((q.x, q.y))
+    # The two ends are walked in opposite directions, so put the end the arc
+    # hangs off first either way - otherwise the tail is stitched to the ramp
+    # end instead and the ribbon jumps clean across the part.
+    if arc_pts:
+        ax, ay = arc_pts[0]
+        if (math.hypot(turn[-1][0] - ax, turn[-1][1] - ay)
+                < math.hypot(turn[0][0] - ax, turn[0][1] - ay)):
+            turn.reverse()
+    parts = ribbon(turn)
 
-    up = V(0, 0, hi - lo)
-    parts, step = [], 24
-    if tail_dir is not None and tail_len > 0:
-        # The straight across the open face, as its own prism. Folded into the
-        # point list above it shares a chunk with the turn-in, and since it cuts
-        # across the middle it can cross the spiral there - one self-intersecting
-        # polygon and the whole boolean is refused.
-        qx = (pts[0][0].x + pts[0][1].x) / 2.0
-        qy = (pts[0][0].y + pts[0][1].y) / 2.0
-        nx, ny = -tail_dir[1], tail_dir[0]
-        a, b = -2.0, tail_len                  # overlap the turn-in a little
-        ring = [V(qx + tail_dir[0] * t + nx * hw,
-                  qy + tail_dir[1] * t + ny * hw, lo) for t in (a, b)]
-        ring += [V(qx + tail_dir[0] * t - nx * hw,
-                   qy + tail_dir[1] * t - ny * hw, lo) for t in (b, a)]
-        parts.append(Part.Face(Part.makePolygon(ring + [ring[0]])).extrude(up))
-    for i in range(0, n, step):
-        seg = pts[i:min(i + step + 2, n + 1)]     # one sample of overlap
-        if len(seg) < 2:
-            continue
-        ring = [q[1] for q in seg] + [q[0] for q in reversed(seg)]
-        parts.append(Part.Face(Part.makePolygon(ring + [ring[0]])).extrude(up))
+    tail = list(arc_pts)
+    if tail and tail_dir is not None and tail_len > 0:
+        ex, ey = tail[-1]
+        tail.append((ex + tail_dir[0] * tail_len, ey + tail_dir[1] * tail_len))
+    if len(tail) > 1:
+        # Start a little back down the turn-in so the two overlap properly.
+        # This has to happen before the resampling below, or it drags the first
+        # point back past the second and flips that segment.
+        if len(turn) > 1:
+            dx, dy = turn[1][0] - turn[0][0], turn[1][1] - turn[0][1]
+            m = math.hypot(dx, dy)
+            if m > 1e-9:
+                tail.insert(0, (turn[0][0] + dx / m * 2.0,
+                                turn[0][1] + dy / m * 2.0))
+        # Even out the spacing. The arc samples sit ~1 mm apart and the straight
+        # arrives as one long jump, so the ribbon normal at the join averages
+        # two quite different directions and the quad there twists.
+        even = [tail[0]]
+        for (x0, y0), (x1, y1) in zip(tail, tail[1:]):
+            k = max(1, int(math.ceil(math.hypot(x1 - x0, y1 - y0) / 1.5)))
+            even += [(x0 + (x1 - x0) * j / k, y0 + (y1 - y0) * j / k)
+                     for j in range(1, k + 1)]
+        parts += ribbon(even, step=8)
     return parts[0] if len(parts) == 1 else parts[0].fuse(parts[1:])
 
 
@@ -1096,20 +1187,25 @@ log("sweeping groove (%d edges, %.0f mm centre-line) ..."
     % (len(spine.Edges), spine.Length))
 groove = sweep_circle(spine)
 
-def anchor_at(u_turn_end, tail_dir, tail_len, z):
-    p = path_point(u_turn_end)
-    return V(p.x + tail_dir[0] * tail_len, p.y + tail_dir[1] * tail_len, z)
+def anchor_at(u_run_end, arc_pts, tail_dir, tail_len, z):
+    """end of the face run; with FACE_TURN = 0 there is none, so the cable just
+    leaves at the ramp and that is where the pocket starts"""
+    if not arc_pts:
+        p = path_point(u_run_end)
+        return V(p.x, p.y, z)
+    x, y = arc_pts[-1]
+    return V(x + tail_dir[0] * tail_len, y + tail_dir[1] * tail_len, z)
 
 
-anchor_bot = anchor_at(u_face_bot, tail_dir_bot, tail_len_bot, 0.0)
-anchor_top = anchor_at(u_face_top, tail_dir_top, tail_len_top, H)
+anchor_bot = anchor_at(u_face_bot, arc_bot, tail_dir_bot, tail_len_bot, 0.0)
+anchor_top = anchor_at(u_face_top, arc_top, tail_dir_top, tail_len_top, H)
 slots = []
 if span_bot > 0 or span_top > 0:
     lap = min(2.0 * SAMPLE_STEP, RAMP_LENGTH * 0.5)
     slots = [face_slot(u_face_bot, u_face_bot_end + lap, zb, False,
-                       tail_dir_bot, tail_len_bot),
+                       arc_bot, tail_dir_bot, tail_len_bot),
              face_slot(u_face_top_start - lap, u_face_top, zt, True,
-                       tail_dir_top, tail_len_top)]
+                       arc_top, tail_dir_top, tail_len_top)]
 
 log("boolean cut ...")
 # Cut sequentially (groove, then channels). Fusing all tools first, or cutting
