@@ -276,11 +276,20 @@ def fit_runs(geo, cable, ramp3d, allow, z0, height, pitch0, plan_at):
     P = geo["P"]
 
     def usable(opts):
+        """runs that leave the pocket its full length; if none do, the ones
+        that come closest - anything else lands the pocket at random, which
+        made a longer pocket sometimes look like it fitted where a shorter
+        one did not"""
         good = [o for o in opts if o[3] > 0.0]
-        return good or opts
+        if good or not opts:
+            return good
+        most = max(o[4] for o in opts)
+        return [o for o in opts if o[4] >= most - 1.0]
 
     none_run = (0.0, [], (0.0, 0.0), 0.0, 0.0)
-    bots = usable(plan_at(-geo["ramp_u"], -1.0)) or [none_run]
+    all_bots = plan_at(-geo["ramp_u"], -1.0)
+    room_max = max([o[4] for o in all_bots] or [0.0])
+    bots = usable(all_bots) or [none_run]
     lb = [geo["len_of"](-geo["ramp_u"], -1.0, o) for o in bots]
     roomy = max(range(len(bots)), key=lambda k: bots[k][3])
 
@@ -318,7 +327,7 @@ def fit_runs(geo, cable, ramp3d, allow, z0, height, pitch0, plan_at):
         b = geo["len_of"](u_t, 1.0, tops[j])
         best = (None, t, pitch_for(t), bots[roomy], lb[roomy], tops[j], b,
                 2.0 * (ramp3d + allow) + lb[roomy] + b + t * per)
-    return best[1:]
+    return best[1:] + (room_max,)
 
 
 # ---------------------------------------------------------------- input dialog
@@ -418,7 +427,7 @@ def preview_geometry(v):
                        lambda u, sg: face_plan(geo, u, sg, collect=True))
         if fit is None:
             return None
-        turns, pitch, bot, face_len, top, len_top, used = fit
+        turns, pitch, bot, face_len, top, len_top, used, room_max = fit
         span, arc_pts, tail_dir, tail_len = bot[0], bot[1], bot[2], bot[3]
         H = v["HEIGHT"] if v["HEIGHT"] > 0 else 2.0 * z0 + pitch * turns
         per_end = (math.hypot(v["RAMP_LENGTH"], z0 - zb)
@@ -427,6 +436,7 @@ def preview_geometry(v):
                     z0=z0, zb=zb, turns=turns, H=H, per_end=per_end,
                     inset=inset, face_len=face_len, span=span,
                     arc_pts=arc_pts, tail_dir=tail_dir, tail_len=tail_len,
+                    pocket_max=room_max,
                     open_w=2.0 * math.sqrt(max(R * R - (depth - R) ** 2, 0.0)))
     except Exception:
         return None
@@ -551,6 +561,13 @@ def ask_values():
                 else:
                     self._side(p, box, geo)
                 ink, hot, faint, _ = self._colours()
+                v = self.values()
+                if (v["FACE_TURN"] > 0
+                        and geo["pocket_max"] < v["CONNECTOR_ALLOWANCE"]):
+                    self._text(p, self.width() / 2.0, self.height() - 32,
+                               "pocket does not fit - max %.0f mm at %.0f mm "
+                               "wide" % (geo["pocket_max"],
+                                         v["CONNECTOR_WIDTH"]), hot)
                 self._text(p, self.width() / 2.0, self.height() - 14,
                            u"⌀%.2f groove · pitch %.2f · "
                            u"%.1f turns · height %.1f mm"
@@ -1024,7 +1041,8 @@ FACE_GEO["len_of"] = run_length
 _fit = fit_runs(FACE_GEO, CABLE_LENGTH, ramp3d, CONNECTOR_ALLOWANCE, z0,
                 HEIGHT, d + MIN_WALL,
                 lambda u, sg: pick_face_run(u, sg, collect=True))
-turns, pitch, _bot, face_len_bot, _top, face_len_top, cable_used = _fit
+(turns, pitch, _bot, face_len_bot, _top, face_len_top, cable_used,
+ pocket_max) = _fit
 span_bot, arc_bot, tail_dir_bot, tail_len_bot = _bot[0], _bot[1], _bot[2], _bot[3]
 span_top, arc_top, tail_dir_top, tail_len_top = _top[0], _top[1], _top[2], _top[3]
 turn_len_bot = face_len_bot - arc_length_of(arc_bot) - tail_len_bot
@@ -1038,9 +1056,11 @@ L_spiral = turns * math.hypot(P, pitch)
 if cable_used > CABLE_LENGTH + 1.0:
     warn("this design wants %.0f mm of cable, %.0f mm more than you have"
          % (cable_used, cable_used - CABLE_LENGTH))
-if min(tail_len_bot, tail_len_top) <= 0.0 and FACE_TURN > 0:
-    warn("no room left across the face for the connector - lower "
-         "CONNECTOR_ALLOWANCE or FACE_INSET, or make the spool bigger")
+if FACE_TURN > 0 and pocket_max < CONNECTOR_ALLOWANCE:
+    warn("a %.0f mm connector pocket does not fit on this face - the longest "
+         "clear %.0f mm wide straight is %.0f mm. Shorten the pocket, narrow "
+         "it, or make the spool bigger."
+         % (CONNECTOR_ALLOWANCE, CONNECTOR_WIDTH, pocket_max))
 
 
 u_end = turns * P                       # perimeter-parameter at spiral end
