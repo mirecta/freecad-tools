@@ -58,10 +58,11 @@ derivation), so there are no image files to ship alongside the macro.
 | `RAMP_LENGTH` | 25 | Perimeter length used by the corridor to climb to a face |
 | `FACE_TURN` | 0.1 | *Minimum* laps of turn-in; it is stretched past this to wherever the straight that follows comes out longest. 0 = stop at the wall |
 | `FACE_INSET` | 0 | How far inward the turn-in moves; 0 = auto, which aims it at the middle of the face |
-| `FACE_EXIT_ANGLE` | 35 | Angle off the long axis the face channel leaves at |
+| `FACE_EXIT_ANGLE` | (10, 55) | Range of exit angles searched; the one leaving the longest clear corridor wins |
 | `FACE_BEND` | 12 | Radius of the arc that swings it onto that heading |
 | `SLOT_EPS` | 0.05 | Face channel oversize, keeps its walls off the swept tube |
 | `FACE_DEPTH` | 0 | Face channel depth; 0 = `d` |
+| `CONNECTOR_WIDTH` | 14 | Width the connector pocket needs kept clear; the exit angle is chosen for this |
 | `CONNECTOR_ALLOWANCE` | 20 | Clear run kept at the end of the channel for the connector. Lower it and the channel runs further |
 | `EDGE_FILLET` | 1.5 | Top/bottom outer edge fillet; 0 = none |
 | `SAMPLE_STEP` | 3.0 | Ramp sampling step; the spiral itself is exact geometry |
@@ -127,17 +128,22 @@ turn-in is oriented so the end the arc hangs off comes first, because the two
 ends are walked in opposite directions and otherwise the tail is stitched to the
 ramp end and the ribbon jumps clean across the part.
 
-After the turn-in the run is swung by a `FACE_BEND` arc onto a diagonal
-(`FACE_EXIT_ANGLE` off the long axis) and then runs straight across the open
-face (`face_plan`). That straight is what gives the connector room - wrapping on
-round the outline instead just parcels the pocket up in more channel.
+After the turn-in the run is swung by a `FACE_BEND` arc onto a diagonal and then
+runs straight across the open face (`face_plan`). That straight is what gives
+the connector room - wrapping on round the outline instead just parcels the
+pocket up in more channel.
 
 The release arc is not optional: a tangent to the turn-in points *along* the
-perimeter, so simply carrying on straight meets the wall within a dozen mm. And
-running down the long axis instead, which reaches furthest, leaves the straight
-lying in a lane with the channel beside it - so the clear run is measured with a
-groove's spacing of clearance from the rest of the run, not just to the outer
-wall.
+perimeter, so simply carrying on straight meets the wall within a dozen mm.
+
+**Both** where the turn-in stops and which heading it is swung onto are searched
+together, and what is maximised is the length of a clear corridor
+`CONNECTOR_WIDTH` wide - that is the space a connector actually occupies.
+Measuring a bare centre line instead picks headings that run down a lane with
+the channel alongside: room on paper that the channel then goes through. So the
+exit angle is an output, not a setting - it comes out near 20° on the default
+spool, flattens to 10° on a long one where the axis has room to spare, and steepens
+to 35° for a 20 mm connector that has to get clear of the channel.
 
 It stops `CONNECTOR_ALLOWANCE` short of the far side, so the pocket you sketch
 from the anchor has exactly that much in front of it. That parameter is the one
