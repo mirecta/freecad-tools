@@ -52,6 +52,11 @@ FACE_TURN           = 0.1     # after the ramp reaches the face the groove turns
 FACE_INSET          = 0.0     # how far inward the groove moves over that run;
                               # 0 = auto (just clears the outer wall)
 FACE_DEPTH          = 0.0     # depth of face channel, 0 = groove diameter
+CONNECTOR_DEPTH     = 0.0     # how deep the connector pocket has to be cut
+                              # (plug thickness). Deeper than the face channel
+                              # and the pocket has to sit over the solid core,
+                              # clear of the groove in the wall - the exit is
+                              # then aimed to make that so. 0 = don't care
 CONNECTOR_WIDTH     = 14.0    # width the connector pocket needs kept clear -
                               # the face channel's exit angle is chosen to make
                               # the clear corridor of this width as long as it
@@ -165,6 +170,11 @@ def face_plan(geo, u_start, sgn, spans=None, collect=False):
     base, bend = geo["turn"] * P, geo["bend"]
     half = geo["width"] / 2.0
     clear = geo["d"] + geo["MIN_WALL"]      # channel-to-channel spacing
+    # A pocket cut deeper than the face channel has to land over the solid
+    # core; outside r - R there is the groove in the wall under it, and the
+    # pocket would break into it. Nothing used to enforce this - the exit
+    # happened to land over solid material by about a millimetre.
+    core = geo.get("core")
     if base <= 0:
         return [] if collect else (base, [], (0.0, 0.0), 0.0)
 
@@ -177,6 +187,12 @@ def face_plan(geo, u_start, sgn, spans=None, collect=False):
                 return True
             return any((x - px) ** 2 + (y - py) ** 2 < clear * clear
                        for px, py in laid)
+
+        def pocket_blocked(x, y):
+            if core is not None and math.hypot(
+                    x - max(-S, min(S, x)), y) > core:
+                return True
+            return blocked(x, y)
 
         a = math.radians(deg)
         tx = math.cos(a) * (1.0 if ex <= 0 else -1.0)
@@ -200,8 +216,9 @@ def face_plan(geo, u_start, sgn, spans=None, collect=False):
         run = 0.0
         while run < 2.0 * (geo["LENGTH"] + geo["WIDTH"]):
             cx, cy = px + tx * (run + 3.0), py + ty * (run + 3.0)
-            if (blocked(cx, cy) or blocked(cx + nx * half, cy + ny * half)
-                    or blocked(cx - nx * half, cy - ny * half)):
+            if (pocket_blocked(cx, cy)
+                    or pocket_blocked(cx + nx * half, cy + ny * half)
+                    or pocket_blocked(cx - nx * half, cy - ny * half)):
                 break
             run += 3.0
         return pts, (tx, ty), run, bend * abs(theta)
@@ -319,7 +336,9 @@ DIALOG_FIELDS = [
     ("RAMP_LENGTH",         "Corridor ramp length",         5, 200,     1, 1,   " mm"),
     ("FACE_TURN",           "Face run (laps round the face)", 0, 2.0,  2, 0.05, ""),
     ("FACE_INSET",          "Face run inset (0 = auto)",    0, 100,    1, 0.5, " mm"),
-    ("CONNECTOR_ALLOWANCE", "Clear space kept for the connector", 0, 200, 1, 1, " mm"),
+    ("CONNECTOR_ALLOWANCE", "Connector pocket length",      0, 200,    1, 1,   " mm"),
+    ("CONNECTOR_WIDTH",      "Connector pocket width",       1, 100,    1, 1,   " mm"),
+    ("CONNECTOR_DEPTH",      "Connector pocket depth (0 = any)", 0, 100, 1, 1,  " mm"),
 ]
 
 # which of the three schematics explains which parameter
@@ -329,7 +348,8 @@ DIAGRAM_VIEW = {
     "FACE_CLEAR": "side",
     "WIDTH": "plan", "LENGTH": "plan", "RAMP_LENGTH": "plan",
     "FACE_TURN": "plan", "FACE_INSET": "plan",
-    "CONNECTOR_ALLOWANCE": "plan",
+    "CONNECTOR_ALLOWANCE": "plan", "CONNECTOR_WIDTH": "plan",
+    "CONNECTOR_DEPTH": "plan",
     "CABLE_LENGTH": "side", "HEIGHT": "side",
 }
 
@@ -385,7 +405,10 @@ def preview_geometry(v):
         geo = dict(S=S, r=r, P=P, R=R, MIN_WALL=v["MIN_WALL"],
                    WIDTH=v["WIDTH"], LENGTH=v["LENGTH"], inset=inset,
                    turn=v["FACE_TURN"], allow=v["CONNECTOR_ALLOWANCE"],
-                   bend=FACE_BEND, d=d, width=CONNECTOR_WIDTH, trans=trans)
+                   bend=FACE_BEND, d=d, width=v["CONNECTOR_WIDTH"],
+                   trans=trans,
+                   core=(r - R - v["MIN_WALL"]
+                         if v["CONNECTOR_DEPTH"] > face_depth else None))
         geo["ramp_u"] = v["RAMP_LENGTH"]
         geo["len_of"] = lambda u, sg, o: (face_turn_length(geo, u, sg, o[0])
                                           + poly_len(o[1]) + o[3])
@@ -1019,6 +1042,7 @@ if min(tail_len_bot, tail_len_top) <= 0.0 and FACE_TURN > 0:
     warn("no room left across the face for the connector - lower "
          "CONNECTOR_ALLOWANCE or FACE_INSET, or make the spool bigger")
 
+
 u_end = turns * P                       # perimeter-parameter at spiral end
 zt = H - zb                             # centre z of top face channel
 z_end = z0 + pitch * turns
@@ -1302,6 +1326,36 @@ def anchor_at(u_run_end, arc_pts, tail_dir, tail_len, z):
 
 anchor_bot = anchor_at(u_face_bot, arc_bot, tail_dir_bot, tail_len_bot, 0.0)
 anchor_top = anchor_at(u_face_top, arc_top, tail_dir_top, tail_len_top, H)
+def from_axis(x, y):
+    return math.hypot(x - max(-S, min(S, x)), y)
+
+
+def pocket_reach(anchor, dirn):
+    """how far from the axis the connector pocket's corners get"""
+    nx, ny = -dirn[1], dirn[0]
+    hw2 = CONNECTOR_WIDTH / 2.0
+    return max(from_axis(anchor.x + dirn[0] * t + nx * w,
+                         anchor.y + dirn[1] * t + ny * w)
+               for t in (0.0, CONNECTOR_ALLOWANCE) for w in (-hw2, hw2))
+
+
+if CONNECTOR_DEPTH > face_depth and FACE_TURN > 0:
+    for tag, anc, dirn in (("bottom", anchor_bot, tail_dir_bot),
+                           ("top", anchor_top, tail_dir_top)):
+        reach = pocket_reach(anc, dirn)
+        if reach > r - R:
+            warn("%s connector pocket (%.0f x %.0f mm) reaches %.1f mm from "
+                 "the axis but solid material only goes to %.1f - cutting it "
+                 "%.0f mm deep would break into the groove in the wall. Make "
+                 "the spool wider, or the pocket narrower/shorter."
+                 % (tag, CONNECTOR_ALLOWANCE, CONNECTOR_WIDTH, reach, r - R,
+                    CONNECTOR_DEPTH))
+        else:
+            log("%s pocket %.0f x %.0f mm fits over solid material with "
+                "%.1f mm to spare (can be cut the full %.1f mm deep)"
+                % (tag, CONNECTOR_ALLOWANCE, CONNECTOR_WIDTH,
+                   (r - R) - reach, H / 2.0))
+
 slots = []
 if span_bot > 0 or span_top > 0:
     lap = min(2.0 * SAMPLE_STEP, RAMP_LENGTH * 0.5)

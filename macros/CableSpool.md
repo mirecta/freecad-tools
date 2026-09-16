@@ -64,6 +64,7 @@ derivation), so there are no image files to ship alongside the macro.
 | `SLOT_EPS` | 0.05 | Face channel oversize, keeps its walls off the swept tube |
 | `FACE_DEPTH` | 0 | Face channel depth; 0 = `d` |
 | `CONNECTOR_WIDTH` | 14 | Width the connector pocket needs kept clear; the exit angle is chosen for this |
+| `CONNECTOR_DEPTH` | 0 | How deep the pocket has to be cut. Deeper than the face channel and it must land over the solid core; 0 = don't care |
 | `CONNECTOR_ALLOWANCE` | 20 | Clear run kept at the end of the channel for the connector. Lower it and the channel runs further |
 | `EDGE_FILLET` | 1.5 | Top/bottom outer edge fillet; 0 = none |
 | `SAMPLE_STEP` | 3.0 | Ramp sampling step; the spiral itself is exact geometry |
