@@ -37,6 +37,11 @@ LENGTH              = 75.0    # outer length (>= WIDTH)
 HEIGHT              = 0.0     # 0 = auto from cable length
                               # >0 = fixed height, pitch is adapted
 
+FACE_CLEAR          = 0.0     # material between the face channel and the first
+                              # spiral turn above it; 0 = use MIN_WALL. Worth
+                              # raising on its own - the wall between two turns
+                              # is loaded quite differently from the roof over
+                              # the channel, which is where the two would meet
 END_MARGIN          = 0.0     # face -> centre of first/last turn, 0 = auto
 RAMP_LENGTH         = 25.0    # length along perimeter used to climb to face
 FACE_TURN           = 0.1     # after the ramp reaches the face the groove turns
@@ -302,6 +307,7 @@ DIALOG_FIELDS = [
     ("LENGTH",              "Spool length (>= width)",      10, 500,    1, 1,   " mm"),
     ("HEIGHT",              "Spool height (0 = auto)",      0, 500,     1, 1,   " mm"),
     ("MIN_WALL",            "Wall between turns",           0.4, 10,    2, 0.1, " mm"),
+    ("FACE_CLEAR",          "Roof over face channel (0 = as wall)", 0, 10, 2, 0.1, " mm"),
     ("RAMP_LENGTH",         "Corridor ramp length",         5, 200,     1, 1,   " mm"),
     ("FACE_TURN",           "Face run (laps round the face)", 0, 2.0,  2, 0.05, ""),
     ("FACE_INSET",          "Face run inset (0 = auto)",    0, 100,    1, 0.5, " mm"),
@@ -312,6 +318,7 @@ DIALOG_FIELDS = [
 DIAGRAM_VIEW = {
     "CABLE_DIAMETER": "section", "CLEARANCE": "section",
     "GROOVE_DEPTH_FAC": "section", "MIN_WALL": "section",
+    "FACE_CLEAR": "side",
     "WIDTH": "plan", "LENGTH": "plan", "RAMP_LENGTH": "plan",
     "FACE_TURN": "plan", "FACE_INSET": "plan",
     "CONNECTOR_ALLOWANCE": "plan",
@@ -358,7 +365,8 @@ def preview_geometry(v):
             return None
         face_depth = FACE_DEPTH if FACE_DEPTH > 0 else d
         zb = face_depth - R
-        z0 = END_MARGIN if END_MARGIN > 0 else face_depth + v["MIN_WALL"] + R
+        z0 = (END_MARGIN if END_MARGIN > 0 else face_depth + R
+              + (v["FACE_CLEAR"] if v["FACE_CLEAR"] > 0 else v["MIN_WALL"]))
         pitch = d + v["MIN_WALL"]
         # the build's own planner, so the preview cannot drift from it
         inset = (v["FACE_INSET"] if v["FACE_INSET"] > 0
@@ -877,7 +885,8 @@ def inward_dir(x, y):
 
 face_depth = FACE_DEPTH if FACE_DEPTH > 0 else d
 zb = face_depth - R                     # centre z of bottom face channel
-z0 = END_MARGIN if END_MARGIN > 0 else face_depth + MIN_WALL + R
+face_clear = FACE_CLEAR if FACE_CLEAR > 0 else MIN_WALL
+z0 = END_MARGIN if END_MARGIN > 0 else face_depth + face_clear + R
 if z0 - zb < 0.5:
     raise ValueError("END_MARGIN too small (ramp would not climb)")
 if RAMP_LENGTH > 0.8 * P:
@@ -1345,6 +1354,12 @@ log("groove Ø%.2f, centre radius %.2f, turns %.2f, pitch %.2f"
 open_w = 2.0 * math.sqrt(max(R * R - (depth - R) ** 2, 0.0))
 log("surface opening %.2f mm, visible rib %.2f mm (true min wall %.2f mm)"
     % (open_w, pitch - open_w, MIN_WALL))
+log("roof over the face channel %.2f mm (face channel ends at z %.2f, first "
+    "turn starts at %.2f)" % (face_clear, face_depth, z0 - R))
+if face_clear < 0.8:
+    warn("only %.2f mm of material over the face channel - the spiral groove "
+         "above it will very nearly break through; raise FACE_CLEAR"
+         % face_clear)
 if pitch - open_w > 1.6 * MIN_WALL:
     log("   -> move GROOVE_DEPTH_FAC (now %.2f) toward 0.5 for a wider "
         "opening / tighter looking coils" % GROOVE_DEPTH_FAC)

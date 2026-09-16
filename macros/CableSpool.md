@@ -51,6 +51,7 @@ derivation), so there are no image files to ship alongside the macro.
 | `CLEARANCE` | 0.3 | Added to diameter → groove diameter `d` |
 | `GROOVE_DEPTH_FAC` | 0.85 | Groove depth / `d`. <0.5 = shallow cradle (cable sits proud), 0.5 = half open and the widest opening there is, 0.8-0.9 = undercut/snap-in. Range [0.25, 1) |
 | `MIN_WALL` | 1.2 | Rib between neighbouring turns |
+| `FACE_CLEAR` | 0 | Material between the face channel and the first spiral turn above it; 0 = use `MIN_WALL` |
 | `WIDTH` | 40 | Outer width = diameter of the round ends |
 | `LENGTH` | 75 | Outer overall length (≥ WIDTH; equal → cylinder) |
 | `HEIGHT` | 0 | 0 = auto from cable; >0 = fixed height, pitch adapts |
@@ -79,7 +80,7 @@ r      = WIDTH/2 - depth + R                 groove centre-line radius
 S      = (LENGTH - WIDTH)/2                  half straight length
 P      = 4*S + 2*pi*r                        centre-line perimeter per turn
 zb     = face_depth - R                      centre z of bottom face channel
-z0     = END_MARGIN or face_depth + MIN_WALL + R
+z0     = END_MARGIN or face_depth + face_clear + R   (face_clear = FACE_CLEAR or MIN_WALL)
 face_inset = FACE_INSET or r - max(3*d, R + MIN_WALL + 0.5)
 face_span  = >= FACE_TURN*P, stretched to wherever the tail comes out longest
 tail_len   = clear run across the face, less CONNECTOR_ALLOWANCE
@@ -236,6 +237,14 @@ wider opening and tighter looking coils.
 
 Measured on the default spool: 0.25 → 3.29 mm opening, 0.5 → 3.80, 0.85 → 2.71,
 0.95 → 1.66.
+
+The face channel runs directly beneath the first spiral turn for the start of
+its run, and the material between them is `z0 - R - face_depth`, which with the
+default `z0` is exactly `FACE_CLEAR` (or `MIN_WALL` when that is 0). At a
+`MIN_WALL` of 0.4 mm that roof is one extrusion wide and the two cavities all
+but meet - raise `FACE_CLEAR` rather than `MIN_WALL` if the rib between turns is
+deliberately thin. The Report view prints the roof thickness and warns below
+0.8 mm.
 
 Print standing on one of the flat faces. The groove is then a sequence of
 horizontal-ish overhangs; with the snap-in lip (`GROOVE_DEPTH_FAC` > 0.5)
