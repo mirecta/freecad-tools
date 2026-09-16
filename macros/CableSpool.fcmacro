@@ -134,9 +134,53 @@ def preview_geometry(v):
         zb = face_depth - R
         z0 = END_MARGIN if END_MARGIN > 0 else face_depth + v["MIN_WALL"] + R
         pitch = d + v["MIN_WALL"]
+        # Same rules as the build, so the preview's turns/height are the ones
+        # you get: auto inset aims at the middle of the face; the run goes at
+        # least FACE_TURN laps and then on to the next middle-of-a-straight;
+        # and the turn count is snapped so the top run ends there too.
         inset = (v["FACE_INSET"] if v["FACE_INSET"] > 0
-                 else (d - depth) + v["MIN_WALL"] + R)
-        face_len = v["FACE_TURN"] * P          # close enough for the preview
+                 else max(0.0, r - max(2.0 * d, R + v["MIN_WALL"] + 0.5)))
+        mids = (0.0, 2.0 * S + math.pi * r)
+
+        def stad_xy(u):
+            u = u % P
+            if u < S:
+                return u, -r
+            u -= S
+            if u < math.pi * r:
+                t = -math.pi / 2 + u / r
+                return S + r * math.cos(t), r * math.sin(t)
+            u -= math.pi * r
+            if u < 2 * S:
+                return S - u, r
+            u -= 2 * S
+            if u < math.pi * r:
+                t = math.pi / 2 + u / r
+                return -S + r * math.cos(t), r * math.sin(t)
+            return -S + (u - math.pi * r), -r
+
+        span = v["FACE_TURN"] * P
+        if span > 0 and S > 1e-6:
+            u0 = -v["RAMP_LENGTH"] - span
+            best = None
+            for t in mids:
+                cand = -(t + math.floor((u0 - t) / P) * P) - v["RAMP_LENGTH"]
+                if cand >= span - 1e-9 and (best is None or cand < best):
+                    best = cand
+            if best is not None:
+                span = best
+        face_len, prev = 0.0, None
+        for i in range(49):
+            f = i / 48.0
+            x, y = stad_xy(-v["RAMP_LENGTH"] - f * span)
+            cxx = max(-S, min(S, x))
+            nx, ny = cxx - x, -y
+            nl = math.hypot(nx, ny) or 1.0
+            o = inset * (f * f * (3 - 2 * f))
+            cur = (x + nx / nl * o, y + ny / nl * o)
+            if prev is not None:
+                face_len += math.hypot(cur[0] - prev[0], cur[1] - prev[1])
+            prev = cur
         per_end = (math.hypot(v["RAMP_LENGTH"], z0 - zb)
                    + face_len + v["CONNECTOR_ALLOWANCE"])
         if v["HEIGHT"] > 0:
@@ -145,6 +189,15 @@ def preview_geometry(v):
         else:
             turns = max(0.0, (v["CABLE_LENGTH"] - 2.0 * per_end)
                         / math.hypot(P, pitch))
+            if S > 1e-6:                        # snap, as the build does
+                best = None
+                for t in mids:
+                    base = (t - v["RAMP_LENGTH"] - span) / P
+                    cand = base + math.floor(turns - base)
+                    if cand > 1.0 and (best is None or cand > best):
+                        best = cand
+                if best is not None:
+                    turns = best
             H = 2.0 * z0 + pitch * turns
         return dict(d=d, R=R, depth=depth, r=r, S=S, P=P, pitch=pitch,
                     z0=z0, zb=zb, turns=turns, H=H, per_end=per_end,
@@ -648,30 +701,52 @@ ramp3d = math.hypot(RAMP_LENGTH, z0 - zb)
 # it keeps going round and tightens inward, the way the last turn on a wound
 # cable naturally does. That leaves it sitting on the inside of the wall, on the
 # face, with no corner anywhere, and that is where the connector pocket starts.
-face_inset = FACE_INSET if FACE_INSET > 0 else (d - depth) + MIN_WALL + R
-face_run = FACE_TURN * P                # how far round the face run goes, in u
-if face_run > 0 and r - face_inset <= R + MIN_WALL:
+# Auto inset aims the run at the MIDDLE of the face, not just clear of the wall:
+# the offset stadium collapses toward the centre segment as the inset grows, so
+# a small end radius is what delivers the cable - and the connector pocket you
+# draw off it - into the middle. Floor it at a radius the cable can still take.
+# Auto inset aims the run at the MIDDLE of the face, not just clear of the wall:
+# the offset stadium collapses toward the centre segment as the inset grows, so
+# a small end radius is what delivers the cable - and the connector pocket you
+# draw off it - into the middle. Floor it at a radius the cable can still take.
+face_end_r = max(2.0 * d, R + MIN_WALL + 0.5)
+face_inset = FACE_INSET if FACE_INSET > 0 else max(0.0, r - face_end_r)
+if FACE_TURN > 0 and r - face_inset <= R + MIN_WALL:
     raise ValueError("FACE_INSET %.1f mm is too deep for this spool "
                      "(groove centre would reach %.1f mm from the axis)"
                      % (face_inset, r - face_inset))
+# u of the middle of each straight side: end the run there and it finishes
+# pointing along the long axis, in the middle of the face, which is where a
+# connector wants to lie. FACE_TURN is the minimum - the run is stretched to
+# whichever of those comes next.
+MID_STRAIGHT = (0.0, 2.0 * S + math.pi * r)
 
 
-if FACE_TURN >= 1.0 and face_inset < FACE_TURN * (d + MIN_WALL):
-    raise ValueError("FACE_TURN %.2f needs FACE_INSET >= %.1f mm, else the run "
-                     "laps back over itself (now %.1f mm)"
-                     % (FACE_TURN, FACE_TURN * (d + MIN_WALL), face_inset))
+def face_run_span(u_start, sgn):
+    """u-span of a face run: at least FACE_TURN laps, then on to the next
+    middle-of-a-straight"""
+    least = FACE_TURN * P
+    if least <= 0 or S < 1e-6:          # a cylinder has no straight to aim at
+        return least
+    u0 = u_start + sgn * least
+    best = None
+    for t in MID_STRAIGHT:
+        k = (math.ceil((u0 - t) / P) if sgn > 0 else math.floor((u0 - t) / P))
+        span = sgn * (t + k * P - u_start)
+        if span >= least - 1e-9 and (best is None or span < best):
+            best = span
+    return least if best is None else best
 
 
-def face_run_length(u_start, sgn):
-    """length of one face run. It only needs r, S, P and face_inset, so it can
-    be measured before the height derivation that wants it for the budget."""
-    if face_run <= 0:
+def face_run_length(u_start, sgn, span):
+    """length of one face run; needs only r, S, P and face_inset, so it can be
+    measured before the height derivation that wants it for the budget"""
+    if span <= 0:
         return 0.0
-    total, prev = 0.0, None
-    n = 48
+    total, prev, n = 0.0, None, 64
     for i in range(n + 1):
         t = i / float(n)
-        x, y, _, _ = stadium_xy(u_start + sgn * t * face_run)
+        x, y, _, _ = stadium_xy(u_start + sgn * t * span)
         nx, ny = inward_dir(x, y)
         o = face_inset * smooth(t)
         cur = (x + nx * o, y + ny * o)
@@ -681,36 +756,80 @@ def face_run_length(u_start, sgn):
     return total
 
 
-# the bottom run starts at a known place; the top one lands wherever the spiral
-# ends, but a fixed u-span has near enough the same length wherever it starts
-face_len = face_run_length(-RAMP_LENGTH, -1.0)
-per_end = ramp3d + face_len + CONNECTOR_ALLOWANCE
-L_spiral = CABLE_LENGTH - 2.0 * per_end
-if L_spiral <= P:
-    raise ValueError("Cable too short for this spool size")
-
-if HEIGHT <= 0:
-    pitch = d + MIN_WALL
-    turns = L_spiral / math.hypot(P, pitch)
-    H = 2.0 * z0 + pitch * turns
-else:
-    H = HEIGHT
-    pitch = d + MIN_WALL
-    for _ in range(10):  # iterate: 3D length depends on pitch
-        turns = L_spiral / math.hypot(P, pitch)
-        pitch = (H - 2.0 * z0) / turns
-    if pitch < d + MIN_WALL:
-        need = 2.0 * z0 + (d + MIN_WALL) * turns
+def spiral_from(len_bot, len_top):
+    """turns and height left for the side wall once both ends have taken theirs"""
+    spiral = CABLE_LENGTH - (2.0 * ramp3d + len_bot + len_top
+                             + 2.0 * CONNECTOR_ALLOWANCE)
+    if spiral <= P:
+        raise ValueError("Cable too short for this spool size")
+    if HEIGHT <= 0:
+        pit = d + MIN_WALL
+        return spiral, spiral / math.hypot(P, pit), pit, None
+    pit = d + MIN_WALL
+    for _ in range(10):                 # 3D length depends on pitch
+        t = spiral / math.hypot(P, pit)
+        pit = (HEIGHT - 2.0 * z0) / t
+    if pit < d + MIN_WALL:
         raise ValueError("HEIGHT too small: need >= %.1f mm "
-                         "(or increase LENGTH/WIDTH)" % need)
+                         "(or increase LENGTH/WIDTH)"
+                         % (2.0 * z0 + (d + MIN_WALL) * t))
+    return spiral, t, pit, HEIGHT
+
+
+def snap_turns(ideal):
+    """Round the turn count down until the TOP run also ends on a middle-of-a-
+    straight. Letting it float instead and stretching the top run to reach one
+    does not settle: a longer top run changes the budget, which moves where the
+    spiral ends, which changes the run again. Snapping the turns fixes the phase
+    outright, and rounding down means we use a little less cable than we have
+    rather than a little more."""
+    if S < 1e-6:
+        return ideal
+    best = None
+    for tgt in MID_STRAIGHT:
+        base = (tgt - RAMP_LENGTH - face_span_bot) / P
+        cand = base + math.floor(ideal - base)
+        if cand > 1.0 and (best is None or cand > best):
+            best = cand
+    return ideal if best is None else best
+
+
+face_span_bot = face_run_span(-RAMP_LENGTH, -1.0)
+face_len_bot = face_run_length(-RAMP_LENGTH, -1.0, face_span_bot)
+face_span_top, face_len_top = face_span_bot, face_len_bot
+L_spiral, turns, pitch, _h = spiral_from(face_len_bot, face_len_top)
+if HEIGHT > 0:
+    # height is fixed, so the turn count is not ours to round - stretch the top
+    # run to the next middle-of-a-straight instead and report the cable drift
+    face_span_top = face_run_span(turns * P + RAMP_LENGTH, 1.0)
+    face_len_top = face_run_length(turns * P + RAMP_LENGTH, 1.0, face_span_top)
+    H = HEIGHT
+else:
+    turns = snap_turns(turns)
+    H = 2.0 * z0 + pitch * turns
+per_end = ramp3d + 0.5 * (face_len_bot + face_len_top) + CONNECTOR_ALLOWANCE
+cable_used = (2.0 * ramp3d + face_len_bot + face_len_top
+              + 2.0 * CONNECTOR_ALLOWANCE
+              + turns * math.hypot(P, pitch))
+if cable_used > CABLE_LENGTH + 1.0:
+    warn("this design wants %.0f mm of cable, %.0f mm more than you have"
+         % (cable_used, cable_used - CABLE_LENGTH))
 
 u_end = turns * P                       # perimeter-parameter at spiral end
 zt = H - zb                             # centre z of top face channel
 z_end = z0 + pitch * turns
 u_face_bot_end = -RAMP_LENGTH           # ramp start = end of the bottom face run
 u_face_top_start = u_end + RAMP_LENGTH  # ramp end   = start of the top face run
-u_face_bot = u_face_bot_end - face_run  # the two anchors, where your pocket goes
-u_face_top = u_face_top_start + face_run
+u_face_bot = u_face_bot_end - face_span_bot   # the anchors: your pockets go here
+u_face_top = u_face_top_start + face_span_top
+
+# a run that laps back over itself has to step in by a groove width per lap
+face_laps = max(face_span_bot, face_span_top) / P
+if face_laps >= 1.0 and face_inset < face_laps * (d + MIN_WALL):
+    raise ValueError("the face run makes %.2f laps but only steps in %.1f mm, "
+                     "so it laps back over itself - it needs >= %.1f mm "
+                     "(raise FACE_INSET or lower FACE_TURN)"
+                     % (face_laps, face_inset, face_laps * (d + MIN_WALL)))
 
 log("perimeter/turn %.1f  turns %.2f  pitch %.2f  height %.1f"
     % (P, turns, pitch, H))
@@ -729,12 +848,10 @@ def off_of(u):
     """how far the centre-line has moved inward from the wall; 0 everywhere
     except the two face runs, where it eases in with the same smoothstep the
     ramps use, so the join stays tangent-continuous"""
-    if face_run <= 0:
-        return 0.0
-    if u < u_face_bot_end:
-        return face_inset * smooth((u_face_bot_end - u) / face_run)
-    if u > u_face_top_start:
-        return face_inset * smooth((u - u_face_top_start) / face_run)
+    if u < u_face_bot_end and face_span_bot > 0:
+        return face_inset * smooth((u_face_bot_end - u) / face_span_bot)
+    if u > u_face_top_start and face_span_top > 0:
+        return face_inset * smooth((u - u_face_top_start) / face_span_top)
     return 0.0
 
 
@@ -925,7 +1042,7 @@ groove = sweep_circle(spine)
 anchor_bot = V(path_point(u_face_bot).x, path_point(u_face_bot).y, 0.0)
 anchor_top = V(path_point(u_face_top).x, path_point(u_face_top).y, H)
 slots = []
-if face_run > 0:
+if face_span_bot > 0 or face_span_top > 0:
     lap = min(2.0 * SAMPLE_STEP, RAMP_LENGTH * 0.5)
     slots = [face_slot(u_face_bot, u_face_bot_end + lap, zb, False),
              face_slot(u_face_top_start - lap, u_face_top, zt, True)]
@@ -998,10 +1115,19 @@ log("surface opening %.2f mm, visible rib %.2f mm (true min wall %.2f mm)"
 if pitch - open_w > 1.6 * MIN_WALL:
     log("   -> lower GROOVE_DEPTH_FAC (now %.2f) for a wider opening / "
         "tighter looking coils" % GROOVE_DEPTH_FAC)
-log("face run %.2f lap (%.0f mm), tightening %.1f mm inward to %.1f mm "
-    "from the axis" % (FACE_TURN, face_len, face_inset, r - face_inset))
-log("spiral cable %.0f mm + 2 x %.0f mm (ramp+face run+pocket) = %.0f mm"
-    % (L_spiral, per_end, CABLE_LENGTH))
+log("face run %.2f/%.2f lap (%.0f/%.0f mm), tightening %.1f mm inward - ends "
+    "%.1f mm from the axis, tightest bend radius %.1f mm"
+    % (face_span_bot / P, face_span_top / P, face_len_bot, face_len_top,
+       face_inset, r - face_inset, r - face_inset))
+if r - face_inset < 1.5 * d:
+    warn("face run ends at a %.1f mm bend radius, tight for a %.1f mm cable - "
+         "raise FACE_INSET's end radius or lower FACE_INSET"
+         % (r - face_inset, CABLE_DIAMETER))
+log("cable: spiral %.0f + 2 x %.0f (ramp+face run+pocket) = %.0f mm of your "
+    "%.0f mm, %.0f mm spare"
+    % (turns * math.hypot(P, pitch), ramp3d + 0.5 * (face_len_bot + face_len_top)
+       + CONNECTOR_ALLOWANCE, cable_used, CABLE_LENGTH,
+       CABLE_LENGTH - cable_used))
 log("pocket anchors: bottom (%.1f, %.1f, 0)  top (%.1f, %.1f, %.1f)"
     % (anchor_bot.x, anchor_bot.y, anchor_top.x, anchor_top.y, H))
 log("-> sketch your connector pocket on each face starting at the anchor, "
