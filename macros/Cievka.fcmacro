@@ -58,16 +58,22 @@ CONN_H          = 7.0     # pocket depth
 
 # =================== 4. BODY ========================================
 WALL            = 2.5     # wall between disc recess and groove
-DISC_FLOOR      = 1.0     # material under the connector pocket
+DISC_FLOOR      = 0.8     # material under the connector pocket
 NOTCH_COUNT     = 12      # cable exits in the flange, 8-16
-FLOOR_OVER_REC  = 2.0     # material between recess bottom and groove
+FLOOR_OVER_REC  = 0.8     # material between recess bottom and groove
+FLANGE_T        = 0.0     # 0 = as thick as the disc needs. Set it and the
+                          # recess, and so the disc, are thinned to suit - the
+                          # flange holds no cable, so every mm off it is a mm
+                          # the groove can have
+DISC_D_INPUT    = 0.0     # 0 = as wide as the recess allows. A smaller disc
+                          # also means a smaller roof over the recess
 
 # =================== 5. DISC RETENTION (bayonet) ====================
 LUG_N           = 3       # lugs on the disc / entry notches in the wall
-LUG_H           = 1.6     # how far a lug sticks out radially
-LUG_T           = 2.2     # lug thickness (axial)
+LUG_H           = 1.0     # how far a lug sticks out radially
+LUG_T           = 1.2     # lug thickness (axial)
 LUG_A           = 26.0    # lug angular width, degrees
-LEDGE_H         = 1.2     # retaining ledge at the recess mouth
+LEDGE_H         = 0.6     # retaining ledge at the recess mouth
 
 # =================== 6. HALVES JOINT ================================
 PIN_D           = 12.0    # central pin diameter
@@ -84,7 +90,7 @@ DOWEL_LEN       = 4.0
 CLR_AX          = 0.3     # axial  - disc vs recess, bayonet channel
 CLR_RAD         = 0.4     # radial - disc vs wall, pin vs socket
 RING_W          = 2.0     # width of the disc's bearing ring
-RING_H          = 0.6     # how proud it stands
+RING_H          = 0.3     # how proud it stands
 
 CHANNEL_SWEEP   = 60.0    # how far round the disc the channel goes before it
                           # turns in to the pocket; 0 = straight in
@@ -187,14 +193,38 @@ if USE_DIALOG and App.GuiUp:
 NOTCH_COUNT = int(round(NOTCH_COUNT))
 
 # ---------------------------------------------------------------- derived
-if DISC_T_INPUT > 0:
-    DISC_T = DISC_T_INPUT
-elif MAKE_POCKET:
-    DISC_T = CONN_H + RING_H + DISC_FLOOR   # deep enough for the pocket
+DISC_T_MIN = LUG_T + DISC_FLOOR + RING_H    # enough to carry the lugs
+if FLANGE_T > 0:                            # work back from the flange
+    ft = FLANGE_T
+    REC_D = ft - FLOOR_OVER_REC
+    DISC_T = REC_D - CLR_AX - LEDGE_H
+    if DISC_T < DISC_T_MIN - 1e-6:
+        raise ValueError(
+            "FLANGE_T %.1f leaves %.2f mm of disc; it needs %.2f (lug %.1f + "
+            "floor %.1f + ring %.1f). The flange is at least %.2f mm: disc "
+            "%.2f + fit %.1f + ledge %.1f + floor %.1f"
+            % (FLANGE_T, DISC_T, DISC_T_MIN, LUG_T, DISC_FLOOR, RING_H,
+               DISC_T_MIN + CLR_AX + LEDGE_H + FLOOR_OVER_REC, DISC_T_MIN,
+               CLR_AX, LEDGE_H, FLOOR_OVER_REC))
 else:
-    DISC_T = LUG_T + DISC_FLOOR + RING_H    # just enough to carry the lugs
-REC_D = DISC_T + CLR_AX + LEDGE_H           # recess depth
-ft = REC_D + FLOOR_OVER_REC                 # flange thickness
+    if DISC_T_INPUT > 0:
+        DISC_T = DISC_T_INPUT
+    elif MAKE_POCKET:
+        DISC_T = CONN_H + RING_H + DISC_FLOOR   # deep enough for the pocket
+    else:
+        DISC_T = DISC_T_MIN
+    REC_D = DISC_T + CLR_AX + LEDGE_H       # recess depth
+    ft = REC_D + FLOOR_OVER_REC             # flange thickness
+thin = ["%s %.2f" % (nm, v) for nm, v in
+        (("ledge", LEDGE_H), ("floor over the recess", FLOOR_OVER_REC),
+         ("disc floor", DISC_FLOOR), ("bearing ring", RING_H)) if v < 0.9]
+if thin:
+    log("the flange is thin by design, so these are down to a perimeter or "
+        "two: " + ", ".join(thin) + " mm")
+for nm, v in (("ledge", LEDGE_H), ("floor over the recess", FLOOR_OVER_REC),
+              ("disc floor", DISC_FLOOR)):
+    if v < 0.5:
+        warn("the %s is %.2f mm - too thin to print on a 0.4 nozzle" % (nm, v))
 
 gd = CABLE_D * GROOVE_DEPTH_N               # groove depth, radial
 gw = CABLE_D * GROOVE_WIDTH_N               # groove width, axial
@@ -244,8 +274,16 @@ Rf = Rw + gd                                # flange
 capacity = n_turns * math.pi * (hub_d + gd)
 
 Hh = gw / 2.0 + ft                          # half height
-Rrec = Rw - WALL
-Rd = Rrec - CLR_RAD                         # disc radius
+if DISC_D_INPUT > 0:
+    Rd = DISC_D_INPUT / 2.0
+    Rrec = Rd + CLR_RAD
+    if Rrec > Rw - WALL:
+        raise ValueError("a %.1f mm disc leaves only %.1f mm of wall to the "
+                         "groove, %.1f is wanted"
+                         % (DISC_D_INPUT, Rw - Rrec, WALL))
+else:
+    Rrec = Rw - WALL
+    Rd = Rrec - CLR_RAD                     # disc radius
 
 LUG_H2 = LUG_H + CLR_RAD                    # lug plus its fit
 CH_H = LUG_T + 2.0 * CLR_AX                 # bayonet channel height
