@@ -36,6 +36,13 @@ HUB_D_INPUT     = 60.0    # used when SIZE_MODE = "diameter"
 GROOVE_DEPTH_N  = 2.5     # groove depth  = CABLE_D * this (radial)
 GROOVE_WIDTH_N  = 5.0     # groove width  = CABLE_D * this (axial)
 PACK_EFF        = 0.85    # how tidily it really winds
+GROOVE_SNAP     = "down"  # a groove 2.5 cables deep still only takes 2 layers,
+                          # so the last 0.5 holds nothing. "down" trims it away,
+                          # "up" grows it to the next whole layer instead (more
+                          # cable, bigger spool), "off" leaves it alone
+TOTAL_H         = 0.0     # 0 = height follows the groove. Set it and the
+                          # groove takes whatever the two flanges do not, so
+                          # the height goes into cable rather than into rim
 
 # =================== 3. CONNECTOR ===================================
 CONN_L          = 25.0    # pocket length (along the disc's X)
@@ -44,16 +51,16 @@ CONN_H          = 7.0     # pocket depth
 
 # =================== 4. BODY ========================================
 WALL            = 2.5     # wall between disc recess and groove
-DISC_FLOOR      = 1.2     # material under the connector pocket
+DISC_FLOOR      = 1.0     # material under the connector pocket
 NOTCH_COUNT     = 12      # cable exits in the flange, 8-16
-FLOOR_OVER_REC  = 2.5     # material between recess bottom and groove
+FLOOR_OVER_REC  = 2.0     # material between recess bottom and groove
 
 # =================== 5. DISC RETENTION (bayonet) ====================
 LUG_N           = 3       # lugs on the disc / entry notches in the wall
 LUG_H           = 1.6     # how far a lug sticks out radially
 LUG_T           = 2.2     # lug thickness (axial)
 LUG_A           = 26.0    # lug angular width, degrees
-LEDGE_H         = 1.6     # retaining ledge at the recess mouth
+LEDGE_H         = 1.2     # retaining ledge at the recess mouth
 
 # =================== 6. HALVES JOINT ================================
 PIN_D           = 12.0    # central pin diameter
@@ -173,9 +180,40 @@ if USE_DIALOG and App.GuiUp:
 NOTCH_COUNT = int(round(NOTCH_COUNT))
 
 # ---------------------------------------------------------------- derived
+DISC_T = CONN_H + RING_H + DISC_FLOOR       # disc has to house the pocket
+REC_D = DISC_T + CLR_AX + LEDGE_H           # recess depth
+ft = REC_D + FLOOR_OVER_REC                 # flange thickness
+
 gd = CABLE_D * GROOVE_DEPTH_N               # groove depth, radial
 gw = CABLE_D * GROOVE_WIDTH_N               # groove width, axial
-layers = max(1, int(gd // CABLE_D))
+if TOTAL_H > 0:                             # give the groove what is left over
+    gw = TOTAL_H - 2.0 * ft
+    if gw < CABLE_D:
+        raise ValueError("TOTAL_H %.1f leaves %.1f mm for the groove; the two "
+                         "flanges alone need %.1f" % (TOTAL_H, gw, 2.0 * ft))
+
+
+def snapped(x, what):
+    """a groove that is not a whole number of cables deep or wide wastes the
+    remainder - it is too small to take another turn"""
+    n = x / CABLE_D
+    if GROOVE_SNAP == "down" and n - int(n) > 1e-6:
+        y = max(1, int(n)) * CABLE_D
+        log("groove %s %.2f -> %.2f; the odd %.2f took no cable"
+            % (what, x, y, x - y))
+        return y
+    if GROOVE_SNAP == "up" and n - int(n) > 1e-6:
+        y = (int(n) + 1) * CABLE_D
+        log("groove %s %.2f -> %.2f, one more %s of cable"
+            % (what, x, y, "layer" if what == "depth" else "turn"))
+        return y
+    return x
+
+
+gd = snapped(gd, "depth")
+if TOTAL_H <= 0:
+    gw = snapped(gw, "width")
+layers = max(1, int(round(gd / CABLE_D, 6)))
 per_layer = max(1, int(gw // CABLE_D))
 n_turns = layers * per_layer * PACK_EFF
 
@@ -193,9 +231,6 @@ Rw = hub_d / 2.0                            # waist, at the parting plane
 Rf = Rw + gd                                # flange
 capacity = n_turns * math.pi * (hub_d + gd)
 
-DISC_T = CONN_H + RING_H + DISC_FLOOR       # disc has to house the pocket
-REC_D = DISC_T + CLR_AX + LEDGE_H           # recess depth
-ft = REC_D + FLOOR_OVER_REC                 # flange thickness
 Hh = gw / 2.0 + ft                          # half height
 Rrec = Rw - WALL
 Rd = Rrec - CLR_RAD                         # disc radius
@@ -211,6 +246,11 @@ log("hub %.1f  outer %.1f  height %.1f  turns %.1f  capacity %.0f mm  disc %.1f"
     % (hub_d, 2 * Rf, 2 * Hh, n_turns, capacity, 2 * Rd))
 log("groove %.1f deep x %.1f wide (%d layers x %d per layer x %.2f)"
     % (gd, gw, layers, per_layer, PACK_EFF))
+log("height %.1f = groove %.1f (%.0f%%) + two flanges %.1f (%.0f%%); a flange "
+    "is pocket %.1f + disc floor %.1f + ring %.1f + fit %.1f + ledge %.1f + "
+    "floor %.1f" % (2 * Hh, gw, 100.0 * gw / (2 * Hh), 2 * ft,
+                    100.0 * ft / Hh, CONN_H, DISC_FLOOR, RING_H, CLR_AX,
+                    LEDGE_H, FLOOR_OVER_REC))
 
 if SIZE_MODE == "length" and capacity < CABLE_LEN - 1:
     warn("holds %.0f mm, you asked for %.0f - widen or deepen the groove"
