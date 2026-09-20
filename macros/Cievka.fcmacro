@@ -45,6 +45,13 @@ TOTAL_H         = 0.0     # 0 = height follows the groove. Set it and the
                           # the height goes into cable rather than into rim
 
 # =================== 3. CONNECTOR ===================================
+MAKE_POCKET     = True    # False = plain discs; you cut the pocket and the
+                          # channel yourself. The disc then no longer has to be
+                          # as deep as the connector, and since the disc sets
+                          # the recess and the recess sets the flange, that is
+                          # most of the flange gone - see DISC_T_INPUT
+DISC_T_INPUT    = 0.0     # 0 = deep enough for the pocket, or just structural
+                          # when MAKE_POCKET is off
 CONN_L          = 25.0    # pocket length (along the disc's X)
 CONN_W          = 12.0    # pocket width
 CONN_H          = 7.0     # pocket depth
@@ -180,7 +187,12 @@ if USE_DIALOG and App.GuiUp:
 NOTCH_COUNT = int(round(NOTCH_COUNT))
 
 # ---------------------------------------------------------------- derived
-DISC_T = CONN_H + RING_H + DISC_FLOOR       # disc has to house the pocket
+if DISC_T_INPUT > 0:
+    DISC_T = DISC_T_INPUT
+elif MAKE_POCKET:
+    DISC_T = CONN_H + RING_H + DISC_FLOOR   # deep enough for the pocket
+else:
+    DISC_T = LUG_T + DISC_FLOOR + RING_H    # just enough to carry the lugs
 REC_D = DISC_T + CLR_AX + LEDGE_H           # recess depth
 ft = REC_D + FLOOR_OVER_REC                 # flange thickness
 
@@ -255,13 +267,17 @@ log("height %.1f = groove %.1f (%.0f%%) + two flanges %.1f (%.0f%%); a flange "
 if SIZE_MODE == "length" and capacity < CABLE_LEN - 1:
     warn("holds %.0f mm, you asked for %.0f - widen or deepen the groove"
          % (capacity, CABLE_LEN))
-if Rd < CONN_L / 2.0 + CABLE_D:
+if MAKE_POCKET and Rd < CONN_L / 2.0 + CABLE_D:
     warn("disc is %.1f mm across but the connector pocket is %.1f long - it "
          "will not fit; a bigger hub or a shorter pocket"
          % (2 * Rd, CONN_L))
-if Rd < CONN_W / 2.0 + CABLE_D:
+if MAKE_POCKET and Rd < CONN_W / 2.0 + CABLE_D:
     warn("disc is %.1f mm across, pocket %.1f wide - will not fit"
          % (2 * Rd, CONN_W))
+if not MAKE_POCKET and CONN_H > DISC_T - RING_H - DISC_FLOOR + 0.05:
+    log("the disc is %.1f thick; a %.1f mm connector needs DISC_T_INPUT about "
+        "%.1f if you want the pocket to have a floor"
+        % (DISC_T, CONN_H, CONN_H + RING_H + DISC_FLOOR))
 if LUG_H2 > CH_H:
     warn("bayonet: the ledge's 45 deg chamfer (%.1f mm) does not fit in the "
          "channel (%.1f mm) - raise LUG_T or lower LUG_H" % (LUG_H2, CH_H))
@@ -498,6 +514,11 @@ def make_disc():
              (Rd + LUG_H, DISC_T), (Rd - 0.1, DISC_T)],
             ang=LUG_A, start=360.0 * i / LUG_N - LUG_A / 2.0))
 
+    if not MAKE_POCKET:
+        log("plain discs - cut the channel and the pocket yourself; the cable "
+            "reaches the disc at its rim, and %.1f mm is the tightest the "
+            "cable bends" % (MIN_BEND_N * CABLE_D))
+        return disc
     path, pocket_a, sweep, lead = disc_channel()
     bend = min_bend_radius(path)
     log("disc channel: %.0f mm straight in, then %.0f deg at %.1f mm radius; "
@@ -551,8 +572,9 @@ for name, sh in (("half_a", half_a), ("half_b", half_b), ("disc", disc)):
     up, bed = (-1, Hh) if name != "disc" else (1, 0.0)
     total, (wa, wz) = hanging(sh, up, bed)
     if total > 1.0:
-        warn("%s has %.0f mm2 of unsupported surface, biggest %.0f mm2 at "
-             "%.1f mm above the bed" % (name, total, wa, abs(bed - wz)))
+        say = log if (name == "disc" and abs(bed - wz) <= RING_H + 1e-6) else warn
+        say("%s has %.0f mm2 of unsupported surface, biggest %.0f mm2 at "
+            "%.1f mm above the bed" % (name, total, wa, abs(bed - wz)))
 
 doc = App.ActiveDocument or App.newDocument("Cievka")
 gap = EXPLODE
