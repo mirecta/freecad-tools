@@ -15,6 +15,7 @@ does the cable length decide how wide the groove has to be. Sizing the diameter
 from the cable instead is what leaves the carrier too small for the plug.
 
     carrier radius = the connector's own corner radius + ROT_WALL
+    carrier thick  = pocket depth + ROT_FLOOR, so cutting it leaves a floor
     bore radius    = carrier radius + CLR
     drum radius    = V-bead apex + WALL
     rim radius     = drum radius + GROOVE_DEPTH
@@ -43,6 +44,7 @@ CONN_W          = 11.6    # pocket width
 CONN_H          = 6.0     # pocket depth
 MAKE_POCKET     = True    # False = plain carriers, you cut pocket and channel
 ROT_WALL        = 1.5     # carrier material outside the pocket
+ROT_FLOOR       = 2.5     # and under it - this is what sets the thickness
 
 # =================== 2. CABLE - this sets the height ================
 CABLE_D         = 3.2     # measured cable diameter
@@ -59,8 +61,9 @@ NOTCH_COUNT     = 10      # cable exits round the face
 NOTCH_D         = 4.0     # how deep a notch cuts into the face
 
 # =================== 4. CARRIER RETENTION (snap bead) ===============
-ROT_T           = 8.0     # carrier thickness; the bead sits at half of it
-BEAD_ANGLE      = 15.0    # bead flank, from the axis; sets how far it stands out
+ROT_T_INPUT     = 0.0     # >0 fixes the carrier thickness; 0 = pocket + floor
+BEAD_H          = 1.07    # how far the bead stands proud, radially
+BEAD_ANGLE      = 15.0    # its flank, from the axis
 
 # =================== 5. HALVES JOINT (snap tabs) ====================
 TAB_COUNT       = 3       # flat tabs on half A, slots on half B
@@ -107,7 +110,7 @@ DIALOG_FIELDS = [
     ("NOTCH_COUNT",  "Cable exits round the face",  3, 48,   0, 1,   ""),
     ("WALL",         "Wall under the groove",     1.0, 10.0, 2, 0.1, " mm"),
     ("FLANGE_T",     "Rim thickness",             1.0, 20.0, 2, 0.1, " mm"),
-    ("ROT_T",        "Carrier thickness",         2.0, 40.0, 1, 0.5, " mm"),
+    ("ROT_FLOOR",    "Floor under the connector", 0.5, 20.0, 1, 0.5, " mm"),
     ("CLR",          "Carrier clearance",         0.1,  2.0, 2, 0.05," mm"),
     ("EXIT_OFFSET",  "Exit off centre",           0.0, 40.0, 1, 0.5, " mm"),
 ]
@@ -160,6 +163,33 @@ def ask_values():
 
 # ------------------------------------------------------------------ sizing
 
+def carrier_thickness():
+    """Thick enough that cutting the pocket leaves a floor under it.
+
+    The carrier sits in a bore that is deeper than the carrier anyway, so
+    thickness costs nothing in diameter or height - only dead space.
+    """
+    if ROT_T_INPUT > 0:
+        return ROT_T_INPUT
+    return CONN_H + ROT_FLOOR
+
+
+def bead_span():
+    """Half the axial length of the V bead.
+
+    The bead is its own feature at mid thickness rather than the whole edge of
+    the carrier, so that making the carrier thicker does not inflate the bead,
+    and with it the bore, the drum and the whole spool.
+    """
+    return BEAD_H / math.tan(math.radians(BEAD_ANGLE))
+
+
+def bead_zone(thickness):
+    span = min(bead_span(), thickness / 2.0)
+    mid = thickness / 2.0
+    return mid - span, mid, mid + span
+
+
 def solve_radii():
     """Connector -> carrier -> bore -> drum -> rim.
 
@@ -175,7 +205,7 @@ def solve_radii():
     defaults to none.
     """
     d = abs(EXIT_OFFSET)
-    bead_h = (ROT_T / 2.0) * math.tan(math.radians(BEAD_ANGLE))
+    bead_h = BEAD_H
     corner = math.hypot(CONN_L / 2.0, d + CONN_W / 2.0)
     rot_r = math.ceil((corner + ROT_WALL) * 20.0) / 20.0
     bore_r = rot_r + CLR
@@ -185,6 +215,7 @@ def solve_radii():
         raise RuntimeError("EXIT_OFFSET %.1f is outside the rim" % d)
     return {"rot_r": rot_r, "bore_r": bore_r, "drum_r": drum_r,
             "flange_r": flange_r, "bead_h": bead_h, "corner": corner,
+            "rot_t": carrier_thickness(),
             "offset": EXIT_OFFSET, "entry_x": CONN_L / 2.0,
             "exit_angle": math.degrees(math.asin(d / flange_r))}
 
@@ -225,14 +256,23 @@ def solve_height(geo):
         mean_d = 2.0 * geo["drum_r"] + GROOVE_DEPTH
         turns = CABLE_LEN / (layers * PACK_EFF * math.pi * mean_d)
         half_h = math.ceil(turns) * CABLE_D / 2.0 + FLANGE_T + GROOVE_DEPTH
-    half_h = max(half_h, floor_h, ROT_T + CLR_AX + WEB_T)
+    half_h = max(half_h, floor_h, carrier_thickness() + CLR_AX + WEB_T)
     return half_h
 
 
 # ------------------------------------------------------------------ shapes
 
 def revolve(profile):
-    """profile = [(r, z), ...] or ("arc", mid, end); closed automatically."""
+    """profile = [(r, z), ...] or ("arc", mid, end); closed automatically.
+
+    Repeated points are dropped: a bead that happens to fill the whole edge of
+    a part lands its last point exactly on the corner that follows it, and a
+    zero length edge is not a thing OCC will build.
+    """
+    profile = [q for i, q in enumerate(profile)
+               if q[0] == "arc" or i == 0 or profile[i - 1][0] == "arc"
+               or abs(q[0] - profile[i - 1][0]) > 1e-9
+               or abs(q[1] - profile[i - 1][1]) > 1e-9]
     pts = []
     edges = []
     cur = None
@@ -267,7 +307,7 @@ def half_profile(geo, half_h):
     ctr = (geo["flange_r"], FLANGE_T + r)
     mid = (ctr[0] + r * math.cos(math.radians(225)),
            ctr[1] + r * math.sin(math.radians(225)))
-    bore_d = min(ROT_T + CLR_AX, half_h - WEB_T)
+    bore_d = min(geo["rot_t"] + CLR_AX, half_h - WEB_T)
     cav_r = min(geo["bore_r"], cavity_radius(geo))
     cav_z = bore_d + WEB_T
     head = [(0.0, bore_d)]
@@ -281,20 +321,27 @@ def half_profile(geo, half_h):
         ("arc", mid, (geo["flange_r"], FLANGE_T)),
         (geo["flange_r"], 0.0),
         (geo["bore_r"], 0.0),
-        (geo["bore_r"] + geo["bead_h"], ROT_T / 2.0),
-        (geo["bore_r"], ROT_T),
+    ] + bead_steps(geo["bore_r"], geo["bead_h"], geo["rot_t"]) + [
         (geo["bore_r"], bore_d),
     ]
 
 
+def bead_steps(r, h, thickness):
+    """The V, as profile points, from the face inwards."""
+    z0, zm, z1 = bead_zone(thickness)
+    pts = []
+    if z0 > 1e-9:
+        pts.append((r, z0))
+    pts.append((r + h, zm))
+    pts.append((r, z1))
+    return pts
+
+
 def carrier_profile(geo):
-    return [
-        (0.0, 0.0),
-        (geo["rot_r"], 0.0),
-        (geo["rot_r"] + geo["bead_h"], ROT_T / 2.0),
-        (geo["rot_r"], ROT_T),
-        (0.0, ROT_T),
-    ]
+    t = geo["rot_t"]
+    return [(0.0, 0.0), (geo["rot_r"], 0.0)] + \
+        bead_steps(geo["rot_r"], geo["bead_h"], t) + \
+        [(geo["rot_r"], t), (0.0, t)]
 
 
 def ribbon(pts, half_w, z0, z1):
@@ -414,7 +461,7 @@ def build_carrier(geo):
     pocket = Part.Face(Part.makePolygon(loop)).extrude(V(0, 0, CONN_H + 1.0))
     reach = math.sqrt(max(1.0, (geo["rot_r"] + 2.0) ** 2 - d ** 2))
     chan = ribbon(run_path(geo, reach, x0), (CABLE_D + CLR) / 2.0,
-                  -1.0, CABLE_D + CLR + 1.0)
+                  -1.0, CABLE_D + CLR)
     return body.cut(pocket.fuse(chan)).removeSplitter()
 
 
@@ -449,8 +496,10 @@ def echo(geo, half_h, parts):
     log("CONNECTOR -> DIAMETER")
     log("  connector          %.1f x %.1f x %.1f mm" % (CONN_L, CONN_W, CONN_H))
     log("  its own diagonal   r %.2f  (what the carrier must contain)" % geo["corner"])
-    log("  carrier            r %.2f  (D %.2f), %.1f thick"
-        % (geo["rot_r"], 2 * geo["rot_r"], ROT_T))
+    log("  carrier            r %.2f  (D %.2f), %.2f thick"
+        % (geo["rot_r"], 2 * geo["rot_r"], geo["rot_t"]))
+    log("  left under it      %.2f under the pocket, %.2f under the channel"
+        % (geo["rot_t"] - CONN_H, geo["rot_t"] - CABLE_D - CLR))
     log("  bore               r %.2f  (carrier + %.2f clearance)" % (geo["bore_r"], CLR))
     log("  V-bead             %.3f proud, flank %.0f deg, apex at r %.3f"
         % (geo["bead_h"], BEAD_ANGLE, geo["bore_r"] + geo["bead_h"]))
@@ -463,7 +512,7 @@ def echo(geo, half_h, parts):
         % (GROOVE_DEPTH, groove_width(geo, half_h), layers, per_layer))
     log("  holds              %.0f mm at %.0f%% packing   (%+.0f mm)"
         % (cap, PACK_EFF * 100, cap - CABLE_LEN))
-    bore_d = min(ROT_T + CLR_AX, half_h - WEB_T)
+    bore_d = min(geo["rot_t"] + CLR_AX, half_h - WEB_T)
     log("  height             %.2f  (half %.2f, bore %.2f deep, web %.2f)"
         % (2 * half_h, half_h, bore_d, WEB_T))
     log("  groove share       %.0f%% of the height"
@@ -510,7 +559,7 @@ def main():
     carrier = build_carrier(geo)
 
     parts = [("half A", half_a, 0.0, 1.0), ("half B", half_b, 0.0, 1.0),
-             ("carrier", carrier, ROT_T, -1.0)]
+             ("carrier", carrier, geo["rot_t"], -1.0)]
     echo(geo, half_h, parts)
 
     doc = App.ActiveDocument or App.newDocument("Cievka")
