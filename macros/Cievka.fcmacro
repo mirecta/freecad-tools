@@ -1,22 +1,32 @@
 # -*- coding: utf-8 -*-
 """
-Cievka.FCMacro  -  parametric cable spool with rotating connector discs
+Cievka.FCMacro  -  parametric cable spool with a rotating connector carrier
 
-Built to macros/cievka-spec.md. Cable winds into the outer groove; each face
-carries a recessed disc that turns freely and holds the connector pocket plus
-the channel that leads the cable end to it. The disc turning is the whole point
-of the design: the cable end can leave through ANY notch in the flange, and the
-disc is then turned to meet it, so the winding need not finish anywhere exact.
+Follows docs/cievka_doc.FCStd. Each half is a ring: the cable winds in the
+outer groove, and a bore in the outer face holds a disc that turns freely and
+carries the connector. The cable leaves the groove through any one of the
+notches round the face, and the carrier is turned to meet it - that the carrier
+turns is the point of the design, so the winding need not end anywhere in
+particular.
 
-The spec says not to move the model to FreeCAD, because a diameter change would
-break sketches (Topological Naming Problem). That applies to sketch-based
-modelling; this is a script - there are no sketches and nothing is referenced by
-name, every run rebuilds from the numbers - so the reason does not carry over.
+Sizing runs connector -> diameter, cable -> height. The connector has to fit in
+the carrier, the carrier sets the bore, the bore sets the drum, and only then
+does the cable length decide how wide the groove has to be. Sizing the diameter
+from the cable instead is what leaves the carrier too small for the plug.
 
-Parts (all printed face-down on the bed, no supports):
-    half_a  body half with the central pin        - flange down, pin up
-    half_b  body half with the socket for the pin - flange down
-    disc    x2, identical                         - flat side down
+    carrier radius = the connector's own corner radius + ROT_WALL
+    bore radius    = carrier radius + CLR
+    drum radius    = V-bead apex + WALL
+    rim radius     = drum radius + GROOVE_DEPTH
+    half height    = the groove width the cable needs + rim + fillet
+
+The carrier is held by a V bead round its edge, snapping into a matching V
+groove in the bore wall. The two halves are the same part printed twice, mated
+by dowels that alternate pin, hole, pin, hole round the parting plane.
+
+Parts, each printed twice, both needing no support:
+    half     - outer face on the bed
+    carrier  - back on the bed, pocket facing up
 
 All dimensions in mm.
 """
@@ -25,106 +35,71 @@ import math
 import FreeCAD as App
 import Part
 
-# =================== 1. CABLE =======================================
-CABLE_D         = 3.5     # measured cable diameter
-CABLE_LEN       = 2000.0  # cable length to store
-SIZE_MODE       = "length"  # "length" -> hub from CABLE_LEN
-                            # "diameter" -> hub from HUB_D_INPUT
-HUB_D_INPUT     = 60.0    # used when SIZE_MODE = "diameter"
+# =================== 1. CONNECTOR - this sets the diameter ==========
+CONN_L          = 35.0    # connector pocket length
+CONN_W          = 11.6    # pocket width
+CONN_H          = 6.0     # pocket depth
+MAKE_POCKET     = True    # False = plain carriers, you cut pocket and channel
+ROT_WALL        = 1.5     # carrier material outside the pocket
 
-# =================== 2. GROOVE ======================================
-GROOVE_DEPTH_N  = 2.5     # groove depth  = CABLE_D * this (radial)
-GROOVE_WIDTH_N  = 5.0     # groove width  = CABLE_D * this (axial)
+# =================== 2. CABLE - this sets the height ================
+CABLE_D         = 3.2     # measured cable diameter
+CABLE_LEN       = 1500.0  # cable to store
+GROOVE_DEPTH    = 6.0     # groove depth, and the fillet radius under the rim
 PACK_EFF        = 0.85    # how tidily it really winds
-GROOVE_SNAP     = "down"  # a groove 2.5 cables deep still only takes 2 layers,
-                          # so the last 0.5 holds nothing. "down" trims it away,
-                          # "up" grows it to the next whole layer instead (more
-                          # cable, bigger spool), "off" leaves it alone
-TOTAL_H         = 0.0     # 0 = height follows the groove. Set it and the
-                          # groove takes whatever the two flanges do not, so
-                          # the height goes into cable rather than into rim
+HEIGHT_INPUT    = 0.0     # >0 = fix the height, report what it then holds
 
-# =================== 3. CONNECTOR ===================================
-MAKE_POCKET     = True    # False = plain discs; you cut the pocket and the
-                          # channel yourself. The disc then no longer has to be
-                          # as deep as the connector, and since the disc sets
-                          # the recess and the recess sets the flange, that is
-                          # most of the flange gone - see DISC_T_INPUT
-DISC_T_INPUT    = 0.0     # 0 = deep enough for the pocket, or just structural
-                          # when MAKE_POCKET is off
-CONN_L          = 25.0    # pocket length (along the disc's X)
-CONN_W          = 12.0    # pocket width
-CONN_H          = 7.0     # pocket depth
+# =================== 3. BODY ========================================
+WALL            = 2.5     # V-groove apex to the bottom of the cable groove
+FLANGE_T        = 3.0     # rim thickness at the face
+WEB_T           = 5.0     # centre web, at the parting plane
+NOTCH_COUNT     = 10      # cable exits round the face
+NOTCH_D         = 4.0     # how deep a notch cuts into the face
 
-# =================== 4. BODY ========================================
-WALL            = 2.5     # wall between disc recess and groove
-DISC_FLOOR      = 0.8     # material under the connector pocket
-NOTCH_COUNT     = 12      # cable exits in the flange, 8-16
-FLOOR_OVER_REC  = 0.8     # material between recess bottom and groove
-FLANGE_T        = 0.0     # 0 = as thick as the disc needs. Set it and the
-                          # recess, and so the disc, are thinned to suit - the
-                          # flange holds no cable, so every mm off it is a mm
-                          # the groove can have
-DISC_D_INPUT    = 0.0     # 0 = as wide as the recess allows. A smaller disc
-                          # also means a smaller roof over the recess
+# =================== 4. CARRIER RETENTION (snap bead) ===============
+ROT_T           = 8.0     # carrier thickness; the bead sits at half of it
+BEAD_ANGLE      = 15.0    # bead flank, from the axis; sets how far it stands out
 
-# =================== 5. DISC RETENTION (bayonet) ====================
-LUG_N           = 3       # lugs on the disc / entry notches in the wall
-LUG_H           = 1.0     # how far a lug sticks out radially
-LUG_T           = 1.2     # lug thickness (axial)
-LUG_A           = 26.0    # lug angular width, degrees
-LEDGE_H         = 0.6     # retaining ledge at the recess mouth
+# =================== 5. HALVES JOINT ================================
+DOWEL_COUNT     = 3       # pins, and as many holes, so both halves are the
+DOWEL_D         = 3.0     # same part printed twice
+DOWEL_LEN       = 3.0
 
-# =================== 6. HALVES JOINT ================================
-PIN_D           = 12.0    # central pin diameter
-PIN_LEN         = 14.0    # how far it reaches into the other half
-PIN_SLOTS       = 4       # longitudinal slots, so the pin can flex
-PIN_SLOT_W      = 1.6
-BARB_H          = 0.9     # snap ring height (radial)
-BARB_T          = 2.0     # snap ring thickness (axial)
-DOWEL_COUNT     = 3       # anti-rotation dowels; also line the notches up
-DOWEL_D         = 4.0
-DOWEL_LEN       = 4.0
-
-# =================== 7. FITS ========================================
-CLR_AX          = 0.3     # axial  - disc vs recess, bayonet channel
-CLR_RAD         = 0.4     # radial - disc vs wall, pin vs socket
-RING_W          = 2.0     # width of the disc's bearing ring
-RING_H          = 0.3     # how proud it stands
-
-CHANNEL_SWEEP   = 60.0    # how far round the disc the channel goes before it
-                          # turns in to the pocket; 0 = straight in
-MIN_BEND_N      = 4.5     # cable bend radius limit = CABLE_D * this
-EXPLODE         = 0.0     # >0 spreads the parts apart for viewing
+# =================== 6. FITS ========================================
+CLR             = 0.5     # the doc's "tolerancia" - carrier in the bore
+CLR_AX          = 0.3
+MIN_BEND_N      = 4.5     # bend radius of the winding = CABLE_D * this
+EXIT_OFFSET     = 0.0     # >0 swings the exit off radial, paid for in
+                          # diameter; 0 is the straight radial run
+EXPLODE         = 0.0
 USE_DIALOG      = True
 # ====================================================================
 
 V = App.Vector
-Z = V(0, 0, 1)
-O = V(0, 0, 0)
 
 
-def log(msg):
-    App.Console.PrintMessage("[Cievka] " + msg + "\n")
+def log(m):
+    App.Console.PrintMessage("[Cievka] " + m + "\n")
 
 
-def warn(msg):
-    App.Console.PrintWarning("[Cievka] " + msg + "\n")
+def warn(m):
+    App.Console.PrintWarning("[Cievka] " + m + "\n")
 
 
-# ---------------------------------------------------------------- input dialog
 DIALOG_FIELDS = [
-    ("CABLE_D",        "Cable diameter",              1.0, 20.0, 2, 0.1, " mm"),
-    ("CABLE_LEN",      "Cable length",                100, 20000, 0, 50, " mm"),
-    ("HUB_D_INPUT",    "Hub diameter (diameter mode)", 10, 400, 1, 1,   " mm"),
-    ("GROOVE_DEPTH_N", "Groove depth / cable dia",    1.0, 10.0, 2, 0.5, ""),
-    ("GROOVE_WIDTH_N", "Groove width / cable dia",    1.0, 20.0, 2, 0.5, ""),
-    ("PACK_EFF",       "Packing efficiency",          0.3, 1.0,  2, 0.05, ""),
-    ("CONN_L",         "Connector pocket length",     2, 200,    1, 1,   " mm"),
-    ("CONN_W",         "Connector pocket width",      2, 200,    1, 1,   " mm"),
-    ("CONN_H",         "Connector pocket depth",      1, 100,    1, 0.5, " mm"),
-    ("NOTCH_COUNT",    "Notches in the flange (8-16)", 3, 48,    0, 1,   ""),
-    ("WALL",           "Wall recess/groove",          1.0, 10.0, 2, 0.1, " mm"),
+    ("CONN_L",       "Connector length",            2, 300,  1, 1,   " mm"),
+    ("CONN_W",       "Connector width",             2, 200,  1, 1,   " mm"),
+    ("CONN_H",       "Connector depth",             1, 100,  1, 0.5, " mm"),
+    ("CABLE_D",      "Cable diameter",            1.0, 20.0, 2, 0.1, " mm"),
+    ("CABLE_LEN",    "Cable length",              100, 20000, 0, 50, " mm"),
+    ("GROOVE_DEPTH", "Groove depth",              1.0, 60.0, 1, 0.5, " mm"),
+    ("HEIGHT_INPUT", "Height (0 = from cable)",     0, 400,  1, 1,   " mm"),
+    ("NOTCH_COUNT",  "Cable exits round the face",  3, 48,   0, 1,   ""),
+    ("WALL",         "Wall under the groove",     1.0, 10.0, 2, 0.1, " mm"),
+    ("FLANGE_T",     "Rim thickness",             1.0, 20.0, 2, 0.1, " mm"),
+    ("ROT_T",        "Carrier thickness",         2.0, 40.0, 1, 0.5, " mm"),
+    ("CLR",          "Carrier clearance",         0.1,  2.0, 2, 0.05," mm"),
+    ("EXIT_OFFSET",  "Exit off centre",           0.0, 40.0, 1, 0.5, " mm"),
 ]
 
 
@@ -132,34 +107,23 @@ class Cancelled(Exception):
     pass
 
 
-def qt_modules():
+def ask_values():
     try:
-        from PySide6 import QtWidgets, QtGui, QtCore
+        from PySide6 import QtWidgets
     except ImportError:
         try:
-            from PySide2 import QtWidgets, QtGui, QtCore
+            from PySide2 import QtWidgets
         except ImportError:
-            from PySide import QtGui, QtCore
-            QtWidgets = QtGui
-    return QtWidgets, QtGui, QtCore
-
-
-def ask_values():
-    QtWidgets, QtGui, QtCore = qt_modules()
+            from PySide import QtGui as QtWidgets
     import FreeCADGui
     prefs = App.ParamGet("User parameter:BaseApp/Preferences/Macros/Cievka")
     g = globals()
-
     dlg = QtWidgets.QDialog(FreeCADGui.getMainWindow())
     dlg.setWindowTitle("Cievka parameters")
     form = QtWidgets.QFormLayout(dlg)
-
-    mode = QtWidgets.QComboBox()
-    mode.addItems(["length", "diameter"])
-    mode.setCurrentIndex(0 if prefs.GetString("SIZE_MODE", SIZE_MODE)
-                         == "length" else 1)
-    form.addRow("Size from", mode)
-
+    pocket = QtWidgets.QCheckBox()
+    pocket.setChecked(bool(prefs.GetBool("MAKE_POCKET", MAKE_POCKET)))
+    form.addRow("Cut the pocket and channel", pocket)
     boxes = {}
     for key, label, lo, hi, dec, step, suf in DIALOG_FIELDS:
         sb = QtWidgets.QDoubleSpinBox()
@@ -170,487 +134,368 @@ def ask_values():
         sb.setValue(prefs.GetFloat(key, float(g[key])))
         form.addRow(label, sb)
         boxes[key] = sb
-
     bb = QtWidgets.QDialogButtonBox(
         QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
     bb.accepted.connect(dlg.accept)
     bb.rejected.connect(dlg.reject)
     form.addRow(bb)
-
-    run = getattr(dlg, "exec", None) or dlg.exec_
-    if not run():
+    if not (getattr(dlg, "exec", None) or dlg.exec_)():
         raise Cancelled("cancelled by user")
-    g["SIZE_MODE"] = mode.currentText()
-    prefs.SetString("SIZE_MODE", g["SIZE_MODE"])
+    g["MAKE_POCKET"] = pocket.isChecked()
+    prefs.SetBool("MAKE_POCKET", g["MAKE_POCKET"])
     for key, sb in boxes.items():
         g[key] = sb.value()
         prefs.SetFloat(key, sb.value())
 
 
-if USE_DIALOG and App.GuiUp:
-    ask_values()
+# ------------------------------------------------------------------ sizing
 
-NOTCH_COUNT = int(round(NOTCH_COUNT))
+def solve_radii():
+    """Connector -> carrier -> bore -> drum -> rim.
 
-# ---------------------------------------------------------------- derived
-DISC_T_MIN = LUG_T + DISC_FLOOR + RING_H    # enough to carry the lugs
-if FLANGE_T > 0:                            # work back from the flange
-    ft = FLANGE_T
-    REC_D = ft - FLOOR_OVER_REC
-    DISC_T = REC_D - CLR_AX - LEDGE_H
-    if DISC_T < DISC_T_MIN - 1e-6:
-        raise ValueError(
-            "FLANGE_T %.1f leaves %.2f mm of disc; it needs %.2f (lug %.1f + "
-            "floor %.1f + ring %.1f). The flange is at least %.2f mm: disc "
-            "%.2f + fit %.1f + ledge %.1f + floor %.1f"
-            % (FLANGE_T, DISC_T, DISC_T_MIN, LUG_T, DISC_FLOOR, RING_H,
-               DISC_T_MIN + CLR_AX + LEDGE_H + FLOOR_OVER_REC, DISC_T_MIN,
-               CLR_AX, LEDGE_H, FLOOR_OVER_REC))
-else:
-    if DISC_T_INPUT > 0:
-        DISC_T = DISC_T_INPUT
-    elif MAKE_POCKET:
-        DISC_T = CONN_H + RING_H + DISC_FLOOR   # deep enough for the pocket
+    The cable turns from circumferential to radial out in the open groove,
+    riding down the fillet, not inside the slot - so the slot itself is
+    straight, and a straight slot crosses the rim in the width of the rim
+    instead of chewing a long chord out of it. The connector then lies along
+    that same line, centred on its closest approach to the axis, which is the
+    placement that needs the least carrier.
+
+    Offsetting the line swings the exit away from dead radial, but every
+    millimetre of offset is paid for in carrier radius, which is why it
+    defaults to none.
+    """
+    d = abs(EXIT_OFFSET)
+    bead_h = (ROT_T / 2.0) * math.tan(math.radians(BEAD_ANGLE))
+    corner = math.hypot(CONN_L / 2.0, d + CONN_W / 2.0)
+    rot_r = math.ceil((corner + ROT_WALL) * 20.0) / 20.0
+    bore_r = rot_r + CLR
+    drum_r = bore_r + bead_h + WALL
+    flange_r = drum_r + GROOVE_DEPTH
+    if d >= flange_r:
+        raise RuntimeError("EXIT_OFFSET %.1f is outside the rim" % d)
+    return {"rot_r": rot_r, "bore_r": bore_r, "drum_r": drum_r,
+            "flange_r": flange_r, "bead_h": bead_h, "corner": corner,
+            "offset": EXIT_OFFSET, "entry_x": CONN_L / 2.0,
+            "exit_angle": math.degrees(math.asin(d / flange_r))}
+
+
+def run_path(geo, x_from, x_to):
+    """Points along the run, outside in. x is measured along the run."""
+    d = geo["offset"]
+    n = max(2, int(abs(x_from - x_to) / 1.5))
+    return [(x_from + (x_to - x_from) * i / float(n), d) for i in range(n + 1)]
+
+
+def groove_width(geo, half_h):
+    """Axial room for cable between the two fillets, both halves together."""
+    return 2.0 * max(0.0, half_h - FLANGE_T - GROOVE_DEPTH)
+
+
+def layer_count():
+    """Turns nest into the layer below, so a layer after the first costs less."""
+    if GROOVE_DEPTH < CABLE_D:
+        return 0
+    return 1 + int((GROOVE_DEPTH - CABLE_D) / (0.866 * CABLE_D))
+
+
+def capacity(geo, half_h):
+    layers = layer_count()
+    per_layer = max(0, int(groove_width(geo, half_h) / CABLE_D))
+    mean_d = 2.0 * geo["drum_r"] + GROOVE_DEPTH
+    return layers * per_layer * PACK_EFF * math.pi * mean_d, layers, per_layer
+
+
+def solve_height(geo):
+    """Cable length -> how wide the groove has to be -> half height."""
+    floor_h = FLANGE_T + GROOVE_DEPTH + WEB_T + CABLE_D / 2.0
+    if HEIGHT_INPUT > 0:
+        half_h = HEIGHT_INPUT / 2.0
     else:
-        DISC_T = DISC_T_MIN
-    REC_D = DISC_T + CLR_AX + LEDGE_H       # recess depth
-    ft = REC_D + FLOOR_OVER_REC             # flange thickness
-thin = ["%s %.2f" % (nm, v) for nm, v in
-        (("ledge", LEDGE_H), ("floor over the recess", FLOOR_OVER_REC),
-         ("disc floor", DISC_FLOOR), ("bearing ring", RING_H)) if v < 0.9]
-if thin:
-    log("the flange is thin by design, so these are down to a perimeter or "
-        "two: " + ", ".join(thin) + " mm")
-for nm, v in (("ledge", LEDGE_H), ("floor over the recess", FLOOR_OVER_REC),
-              ("disc floor", DISC_FLOOR)):
-    if v < 0.5:
-        warn("the %s is %.2f mm - too thin to print on a 0.4 nozzle" % (nm, v))
-
-gd = CABLE_D * GROOVE_DEPTH_N               # groove depth, radial
-gw = CABLE_D * GROOVE_WIDTH_N               # groove width, axial
-if TOTAL_H > 0:                             # give the groove what is left over
-    gw = TOTAL_H - 2.0 * ft
-    if gw < CABLE_D:
-        raise ValueError("TOTAL_H %.1f leaves %.1f mm for the groove; the two "
-                         "flanges alone need %.1f" % (TOTAL_H, gw, 2.0 * ft))
+        layers = max(1, layer_count())
+        mean_d = 2.0 * geo["drum_r"] + GROOVE_DEPTH
+        turns = CABLE_LEN / (layers * PACK_EFF * math.pi * mean_d)
+        half_h = math.ceil(turns) * CABLE_D / 2.0 + FLANGE_T + GROOVE_DEPTH
+    half_h = max(half_h, floor_h, ROT_T + CLR_AX + WEB_T)
+    return half_h
 
 
-def snapped(x, what):
-    """a groove that is not a whole number of cables deep or wide wastes the
-    remainder - it is too small to take another turn"""
-    n = x / CABLE_D
-    if GROOVE_SNAP == "down" and n - int(n) > 1e-6:
-        y = max(1, int(n)) * CABLE_D
-        log("groove %s %.2f -> %.2f; the odd %.2f took no cable"
-            % (what, x, y, x - y))
-        return y
-    if GROOVE_SNAP == "up" and n - int(n) > 1e-6:
-        y = (int(n) + 1) * CABLE_D
-        log("groove %s %.2f -> %.2f, one more %s of cable"
-            % (what, x, y, "layer" if what == "depth" else "turn"))
-        return y
-    return x
+# ------------------------------------------------------------------ shapes
+
+def revolve(profile):
+    """profile = [(r, z), ...] or ("arc", mid, end); closed automatically."""
+    pts = []
+    edges = []
+    cur = None
+    for item in profile:
+        if item[0] == "arc":
+            _, mid, end = item
+            edges.append(Part.Arc(V(cur[0], 0, cur[1]),
+                                  V(mid[0], 0, mid[1]),
+                                  V(end[0], 0, end[1])).toShape())
+            cur = end
+        else:
+            if cur is not None:
+                edges.append(Part.LineSegment(V(cur[0], 0, cur[1]),
+                                              V(item[0], 0, item[1])).toShape())
+            cur = item
+            pts.append(item)
+    edges.append(Part.LineSegment(V(cur[0], 0, cur[1]),
+                                  V(pts[0][0], 0, pts[0][1])).toShape())
+    wire = Part.Wire(edges)
+    return Part.Face(wire).revolve(V(0, 0, 0), V(0, 0, 1), 360)
 
 
-gd = snapped(gd, "depth")
-if TOTAL_H <= 0:
-    gw = snapped(gw, "width")
-layers = max(1, int(round(gd / CABLE_D, 6)))
-per_layer = max(1, int(gw // CABLE_D))
-n_turns = layers * per_layer * PACK_EFF
+def half_profile(geo, half_h):
+    """Outer face at z = 0, parting plane at z = half_h.
 
-hub_min = max(8.0 * CABLE_D, 30.0)          # cable bend radius, not the printer
-if SIZE_MODE == "diameter":
-    hub_d = HUB_D_INPUT
-else:
-    hub_d = CABLE_LEN / (n_turns * math.pi) - gd
-if hub_d < hub_min:
-    log("hub %.1f mm raised to the %.1f mm the cable's bend radius allows"
-        % (hub_d, hub_min))
-    hub_d = hub_min
-
-Rw = hub_d / 2.0                            # waist, at the parting plane
-Rf = Rw + gd                                # flange
-capacity = n_turns * math.pi * (hub_d + gd)
-
-Hh = gw / 2.0 + ft                          # half height
-if DISC_D_INPUT > 0:
-    Rd = DISC_D_INPUT / 2.0
-    Rrec = Rd + CLR_RAD
-    if Rrec > Rw - WALL:
-        raise ValueError("a %.1f mm disc leaves only %.1f mm of wall to the "
-                         "groove, %.1f is wanted"
-                         % (DISC_D_INPUT, Rw - Rrec, WALL))
-else:
-    Rrec = Rw - WALL
-    Rd = Rrec - CLR_RAD                     # disc radius
-
-LUG_H2 = LUG_H + CLR_RAD                    # lug plus its fit
-CH_H = LUG_T + 2.0 * CLR_AX                 # bayonet channel height
-z_rec_bot = Hh - REC_D
-z_ch_top = Hh - LEDGE_H
-z_ch_bot = z_ch_top - CH_H
-z_disc_top = Hh - LEDGE_H - CLR_AX
-
-log("hub %.1f  outer %.1f  height %.1f  turns %.1f  capacity %.0f mm  disc %.1f"
-    % (hub_d, 2 * Rf, 2 * Hh, n_turns, capacity, 2 * Rd))
-log("groove %.1f deep x %.1f wide (%d layers x %d per layer x %.2f)"
-    % (gd, gw, layers, per_layer, PACK_EFF))
-log("height %.1f = groove %.1f (%.0f%%) + two flanges %.1f (%.0f%%); a flange "
-    "is pocket %.1f + disc floor %.1f + ring %.1f + fit %.1f + ledge %.1f + "
-    "floor %.1f" % (2 * Hh, gw, 100.0 * gw / (2 * Hh), 2 * ft,
-                    100.0 * ft / Hh, CONN_H, DISC_FLOOR, RING_H, CLR_AX,
-                    LEDGE_H, FLOOR_OVER_REC))
-
-if SIZE_MODE == "length" and capacity < CABLE_LEN - 1:
-    warn("holds %.0f mm, you asked for %.0f - widen or deepen the groove"
-         % (capacity, CABLE_LEN))
-if MAKE_POCKET and Rd < CONN_L / 2.0 + CABLE_D:
-    warn("disc is %.1f mm across but the connector pocket is %.1f long - it "
-         "will not fit; a bigger hub or a shorter pocket"
-         % (2 * Rd, CONN_L))
-if MAKE_POCKET and Rd < CONN_W / 2.0 + CABLE_D:
-    warn("disc is %.1f mm across, pocket %.1f wide - will not fit"
-         % (2 * Rd, CONN_W))
-if not MAKE_POCKET and CONN_H > DISC_T - RING_H - DISC_FLOOR + 0.05:
-    log("the disc is %.1f thick; a %.1f mm connector needs DISC_T_INPUT about "
-        "%.1f if you want the pocket to have a floor"
-        % (DISC_T, CONN_H, CONN_H + RING_H + DISC_FLOOR))
-if LUG_H2 > CH_H:
-    warn("bayonet: the ledge's 45 deg chamfer (%.1f mm) does not fit in the "
-         "channel (%.1f mm) - raise LUG_T or lower LUG_H" % (LUG_H2, CH_H))
-if FLOOR_OVER_REC < 2.0:
-    warn("only %.1f mm between the recess floor and the groove"
-         % FLOOR_OVER_REC)
-if NOTCH_COUNT % DOWEL_COUNT:
-    warn("NOTCH_COUNT %d is not a multiple of DOWEL_COUNT %d - the notches in "
-         "the two halves will not line up" % (NOTCH_COUNT, DOWEL_COUNT))
-if not 8 <= NOTCH_COUNT <= 16:
-    log("NOTCH_COUNT %d is outside the 8-16 the spec suggests" % NOTCH_COUNT)
+    The bore stops at the carrier rather than running on to the web, so the one
+    flat ceiling in the part is as close to the bed as it can be; the slab that
+    would otherwise sit above it is hollowed from the parting plane, where the
+    cavity opens upward in print and needs nothing to hold it up.
+    """
+    r = GROOVE_DEPTH
+    ctr = (geo["flange_r"], FLANGE_T + r)
+    mid = (ctr[0] + r * math.cos(math.radians(225)),
+           ctr[1] + r * math.sin(math.radians(225)))
+    bore_d = min(ROT_T + CLR_AX, half_h - WEB_T)
+    cav_r = min(geo["bore_r"], cavity_radius(geo))
+    cav_z = bore_d + WEB_T
+    head = [(0.0, bore_d)]
+    if cav_r > 2.0 and half_h - cav_z > 1.0:
+        head += [(0.0, cav_z), (cav_r, cav_z), (cav_r, half_h)]
+    else:
+        head += [(0.0, half_h)]
+    return head + [
+        (geo["drum_r"], half_h),
+        (geo["drum_r"], FLANGE_T + r),
+        ("arc", mid, (geo["flange_r"], FLANGE_T)),
+        (geo["flange_r"], 0.0),
+        (geo["bore_r"], 0.0),
+        (geo["bore_r"] + geo["bead_h"], ROT_T / 2.0),
+        (geo["bore_r"], ROT_T),
+        (geo["bore_r"], bore_d),
+    ]
 
 
-# ---------------------------------------------------------------- helpers
-def revolved(points, ang=360.0, start=0.0):
-    """solid of revolution about Z from an (r, z) profile"""
-    pts = [V(r, 0.0, z) for r, z in points]
-    sol = Part.Face(Part.makePolygon(pts + [pts[0]])).revolve(O, Z, ang)
-    if start:
-        sol.rotate(O, Z, start)
-    return sol
+def carrier_profile(geo):
+    return [
+        (0.0, 0.0),
+        (geo["rot_r"], 0.0),
+        (geo["rot_r"] + geo["bead_h"], ROT_T / 2.0),
+        (geo["rot_r"], ROT_T),
+        (0.0, ROT_T),
+    ]
 
 
-def slot(r0, r1, z0, z1, width, ang):
-    """radial slot of constant width - a cable channel, not a pie sector"""
-    b = Part.makeBox(r1 - r0, width, z1 - z0, V(r0, -width / 2.0, z0))
-    b.rotate(O, Z, ang)
-    return b
-
-
-def prof_r(z):
-    """outer radius of a half at height z; parabolic waist, then cylinder"""
-    if z >= gw / 2.0:
-        return Rf
-    return Rw + gd * (z / (gw / 2.0)) ** 2
-
-
-def body_profile(n=48):
-    """(r, z) profile of one half, from the axis round to the axis"""
-    pts = [(0.0, 0.0)]
-    for i in range(n + 1):
-        z = gw / 2.0 * i / n
-        pts.append((prof_r(z), z))
-    pts.append((Rf, Hh))
-    pts.append((0.0, Hh))
-    return pts
-
-
-def min_bend_radius(path):
-    """tightest turn along a sampled path"""
-    best = 1e9
-    for i in range(1, len(path) - 1):
-        (x0, y0), (x1, y1), (x2, y2) = path[i - 1], path[i], path[i + 1]
-        a = math.hypot(x1 - x0, y1 - y0)
-        b = math.hypot(x2 - x1, y2 - y1)
-        c = math.hypot(x2 - x0, y2 - y0)
-        if a < 0.2 or b < 0.2:      # too short to say anything about curvature
-            continue
-        area2 = abs((x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0))
-        if area2 > 1e-9:
-            best = min(best, a * b * c / (2.0 * area2))
-    return best
-
-
-def channel_run(lead, sweep):
-    """rim inward for `lead`, then an arc of MIN_BEND radius turning `sweep`;
-    returns the path, the direction it ends in and the end point"""
-    bend = MIN_BEND_N * CABLE_D * 1.05
-    a0 = math.radians(-90.0)
-    p = (math.cos(a0) * (Rd + 1.0), math.sin(a0) * (Rd + 1.0))
-    u = (-math.cos(a0), -math.sin(a0))          # radially inward
-    n = max(2, int(lead))
-    out = [(p[0] + u[0] * lead * i / n, p[1] + u[1] * lead * i / n)
-           for i in range(n + 1)]
-    q = out[-1]
-    c = (q[0] - u[1] * bend, q[1] + u[0] * bend)
-    v0 = math.atan2(q[1] - c[1], q[0] - c[0])
-    th = math.radians(sweep)
-    m = max(6, int(th * bend))
-    for i in range(1, m + 1):
-        v = v0 + th * i / m
-        out.append((c[0] + bend * math.cos(v), c[1] + bend * math.sin(v)))
-    return out, math.degrees(math.atan2(u[1], u[0])) + sweep
-
-
-def pocket_reach(end, ang):
-    """how far from the disc centre the connector pocket's corners get"""
-    a = math.radians(ang)
-    d = (math.cos(a), math.sin(a))
-    nn = (-d[1], d[0])
-    return max(math.hypot(end[0] + d[0] * t + nn[0] * w,
-                          end[1] + d[1] * t + nn[1] * w)
-               for t in (0.0, CONN_L) for w in (-CONN_W / 2.0, CONN_W / 2.0))
-
-
-def disc_channel():
-    """Cable channel across the disc: in at the rim radially - meeting the
-    radial groove on the flange face - then one arc at the cable's own bend
-    radius. The connector pocket is laid where that arc comes out, along the
-    direction it comes out in, so the cable runs straight into it.
-
-    Built forwards rather than fitted between two fixed ends. Once the run has
-    turned in it is no longer radial, so its end is not ours to choose: asking
-    for a curve between the rim and a pocket at a fixed angle either loops back
-    on itself or takes all its bending at the ends. Nor can the run come in to
-    the pocket tangentially - a spiral arriving at radius CONN_L/2 is by
-    construction turning at about that radius, some 12 mm, well under what the
-    cable takes. The pocket's angle costs nothing on a disc that turns anyway.
-
-    Picks the widest sweep, and the longest lead-in, that still leave the
-    whole pocket on the disc."""
-    limit = Rd - CABLE_D / 2.0 - 1.0
-    best = None
-    sweep = min(CHANNEL_SWEEP, 150.0)
-    while sweep >= 0.0:
-        for lead10 in range(int(Rd * 8), 20, -4):
-            path, ang = channel_run(lead10 / 10.0, sweep)
-            if pocket_reach(path[-1], ang) <= limit:
-                best = (path, ang, sweep, lead10 / 10.0)
-                break
-        if best:
-            break
-        sweep -= 5.0
-    if best is None:
-        path, ang = channel_run(max(2.0, Rd * 0.3), 0.0)
-        best = (path, ang, 0.0, Rd * 0.3)
-    return best
-
-
-def ribbon(path, half_w, z0, z1):
-    """prism of width 2*half_w following a path, for a cable channel"""
-    n = len(path)
+def ribbon(pts, half_w, z0, z1):
+    """Prism of the given width along a plan-view path."""
     left, right = [], []
-    for i, (x, y) in enumerate(path):
-        px, py = path[max(0, i - 1)]
-        qx, qy = path[min(n - 1, i + 1)]
-        dx, dy = qx - px, qy - py
-        m = math.hypot(dx, dy) or 1.0
-        nx, ny = -dy / m, dx / m
+    for i, (x, y) in enumerate(pts):
+        j = max(0, i - 1)
+        k = min(len(pts) - 1, i + 1)
+        tx, ty = pts[k][0] - pts[j][0], pts[k][1] - pts[j][1]
+        m = math.hypot(tx, ty) or 1.0
+        nx, ny = -ty / m, tx / m
         left.append(V(x + nx * half_w, y + ny * half_w, z0))
         right.append(V(x - nx * half_w, y - ny * half_w, z0))
-    parts = []
-    step = 12
-    for i in range(0, n - 1, step):
-        seg_l = left[i:min(i + step + 2, n)]
-        seg_r = right[i:min(i + step + 2, n)]
-        if len(seg_l) < 2:
-            continue
-        ring = seg_r + seg_l[::-1]
-        parts.append(Part.Face(Part.makePolygon(ring + [ring[0]]))
-                     .extrude(V(0, 0, z1 - z0)))
-    end = Part.makeCylinder(half_w, z1 - z0,
-                            V(path[-1][0], path[-1][1], z0))
-    parts.append(end)
-    return parts[0] if len(parts) == 1 else parts[0].fuse(parts[1:])
+    loop = left + right[::-1]
+    loop.append(loop[0])
+    return Part.Face(Part.makePolygon(loop)).extrude(V(0, 0, z1 - z0))
 
 
-# ---------------------------------------------------------------- the parts
-def make_half(with_pin):
-    """One body half. Printed flange down, so 'up in the print' is -z here:
-    the outer profile must not widen that way (the parabola does not), and any
-    cavity that widens that way needs a 45 deg chamfer."""
-    body = revolved(body_profile())
+PIN_WALL = 1.2     # material either side of a dowel
 
-    cuts = [
-        # recess for the disc, open at the flange face - a hole, not an overhang
-        Part.makeCylinder(Rrec, REC_D + 1.0, V(0, 0, z_rec_bot)),
-        # bayonet channel, chamfered at 45 deg where it narrows again going up
-        revolved([(Rrec, z_ch_bot), (Rrec + LUG_H2, z_ch_bot + LUG_H2),
-                  (Rrec + LUG_H2, z_ch_top), (Rrec, z_ch_top)]),
-    ]
-    # the lugs' way in
-    for i in range(LUG_N):
-        cuts.append(revolved([(Rrec, z_ch_top), (Rrec + LUG_H2, z_ch_top),
-                              (Rrec + LUG_H2, Hh + 1), (Rrec, Hh + 1)],
-                             ang=LUG_A + 4.0,
-                             start=360.0 * i / LUG_N - (LUG_A + 4.0) / 2.0))
-    # cable exits: through the flange into the groove, then a shallow groove
-    # across the face to the disc recess. Both open on the bed.
-    nw = CABLE_D + 2.0 * CLR_RAD
+
+def pin_radius(geo):
+    """Dowels sit in the drum wall, measured in from the drum.
+
+    Splitting the difference between bore and drum instead would put them in a
+    wall barely thicker than the dowel itself, leaving a tenth of a millimetre
+    of plastic round each one.
+    """
+    return geo["drum_r"] - PIN_WALL - (DOWEL_D + CLR_AX) / 2.0
+
+
+def cavity_radius(geo):
+    return pin_radius(geo) - (DOWEL_D + CLR_AX) / 2.0 - PIN_WALL
+
+
+def dowel_angles():
+    n = int(round(DOWEL_COUNT))
+    step = 180.0 / n
+    pins = [step / 2.0 + k * 2.0 * step for k in range(n)]
+    holes = [3.0 * step / 2.0 + k * 2.0 * step for k in range(n)]
+    return pins, holes
+
+
+def build_half(geo, half_h):
+    body = revolve(half_profile(geo, half_h))
+    reach = math.sqrt(max(1.0, (geo["flange_r"] + 3.0) ** 2 - geo["offset"] ** 2))
+    slot = ribbon(run_path(geo, reach, -geo["bore_r"] + 2.0),
+                  (CABLE_D + CLR) / 2.0, -1.0, NOTCH_D)
+    cuts = []
     for i in range(NOTCH_COUNT):
-        a = 360.0 * i / NOTCH_COUNT
-        cuts.append(slot(Rf - CABLE_D - 1.5, Rf + 1.0, gw / 2.0, Hh + 1.0,
-                         nw, a))
-        cuts.append(slot(Rrec - 1.0, Rf + 1.0, Hh - CABLE_D * 0.8, Hh + 1.0,
-                         nw, a))
-
-    if with_pin:
-        pin = Part.makeCylinder(PIN_D / 2.0, PIN_LEN, V(0, 0, -PIN_LEN))
-        zb = -PIN_LEN + 1.0
-        barb = revolved([(PIN_D / 2.0 - 0.1, zb),
-                         (PIN_D / 2.0 + BARB_H, zb + BARB_T),
-                         (PIN_D / 2.0 - 0.1, zb + BARB_T)])
-        body = body.fuse(pin).fuse(barb)
-        for i in range(PIN_SLOTS):            # so the pin can flex
-            cuts.append(slot(0.0, PIN_D / 2.0 + BARB_H + 1.0,
-                             -PIN_LEN - 1.0, -2.0, PIN_SLOT_W,
-                             360.0 * i / PIN_SLOTS))
-        for i in range(DOWEL_COUNT):
-            d = Part.makeCylinder(DOWEL_D / 2.0, DOWEL_LEN,
-                                  V(0, 0, -DOWEL_LEN))
-            d.translate(V(r_dowel * math.cos(math.radians(360.0 * i / DOWEL_COUNT)),
-                          r_dowel * math.sin(math.radians(360.0 * i / DOWEL_COUNT)), 0))
-            body = body.fuse(d)
-    else:
-        br = PIN_D / 2.0 + CLR_RAD
-        cuts.append(Part.makeCylinder(br, PIN_LEN + 1.0, V(0, 0, -0.5)))
-        zg = PIN_LEN - 1.0 - BARB_T - CLR_AX   # where the barb lands
-        step = BARB_H + CLR_RAD
-        cuts.append(revolved([(br, zg), (br + step, zg + step),
-                              (br + step, zg + BARB_T + 2 * CLR_AX),
-                              (br, zg + BARB_T + 2 * CLR_AX)]))
-        for i in range(DOWEL_COUNT):
-            d = Part.makeCylinder(DOWEL_D / 2.0 + CLR_RAD, DOWEL_LEN + 0.5,
-                                  V(0, 0, -0.5))
-            d.translate(V(r_dowel * math.cos(math.radians(360.0 * i / DOWEL_COUNT)),
-                          r_dowel * math.sin(math.radians(360.0 * i / DOWEL_COUNT)), 0))
-            cuts.append(d)
-
-    for c in cuts:
-        body = body.cut(c)
-    return body
+        c = slot.copy()
+        c.rotate(V(0, 0, 0), V(0, 0, 1), 360.0 * i / NOTCH_COUNT)
+        cuts.append(c)
+    body = body.cut(Part.makeCompound(cuts))
+    pin_r = pin_radius(geo)
+    pins, holes = dowel_angles()
+    add, sub = [], []
+    for a in pins:
+        p = V(pin_r * math.cos(math.radians(a)), pin_r * math.sin(math.radians(a)), half_h)
+        add.append(Part.makeCylinder(DOWEL_D / 2.0, DOWEL_LEN, p))
+    for a in holes:
+        p = V(pin_r * math.cos(math.radians(a)), pin_r * math.sin(math.radians(a)),
+              half_h - DOWEL_LEN - 0.4)
+        sub.append(Part.makeCylinder((DOWEL_D + CLR_AX) / 2.0, DOWEL_LEN + 0.5, p))
+    body = body.cut(Part.makeCompound(sub)).fuse(Part.makeCompound(add))
+    return body.removeSplitter()
 
 
-def make_disc():
-    """The disc: bearing ring down on the bed, channel and pocket up."""
-    disc = Part.makeCylinder(Rd, DISC_T - RING_H, V(0, 0, RING_H))
-    ring = revolved([(Rd - RING_W, 0.0), (Rd, 0.0), (Rd, RING_H),
-                     (Rd - RING_W, RING_H)])
-    disc = disc.fuse(ring)
-    for i in range(LUG_N):                     # bayonet lugs, chamfered under
-        disc = disc.fuse(revolved(
-            [(Rd - 0.1, DISC_T - LUG_T - LUG_H), (Rd + LUG_H, DISC_T - LUG_T),
-             (Rd + LUG_H, DISC_T), (Rd - 0.1, DISC_T)],
-            ang=LUG_A, start=360.0 * i / LUG_N - LUG_A / 2.0))
-
+def build_carrier(geo):
+    body = revolve(carrier_profile(geo))
     if not MAKE_POCKET:
-        log("plain discs - cut the channel and the pocket yourself; the cable "
-            "reaches the disc at its rim, and %.1f mm is the tightest the "
-            "cable bends" % (MIN_BEND_N * CABLE_D))
-        return disc
-    path, pocket_a, sweep, lead = disc_channel()
-    bend = min_bend_radius(path)
-    log("disc channel: %.0f mm straight in, then %.0f deg at %.1f mm radius; "
-        "pocket laid where it comes out" % (lead, sweep, bend))
-    if sweep < CHANNEL_SWEEP - 0.5:
-        log("   sweep pulled back from %.0f deg - the pocket would have run "
-            "off the disc" % CHANNEL_SWEEP)
-    if bend < MIN_BEND_N * CABLE_D:
-        warn("the disc channel turns at %.1f mm radius, tighter than the "
-             "%.1f mm this cable takes - lower CHANNEL_SWEEP (now %.0f deg)"
-             % (bend, MIN_BEND_N * CABLE_D, CHANNEL_SWEEP))
-    else:
-        log("disc channel bends no tighter than %.1f mm (limit %.1f)"
-            % (bend, MIN_BEND_N * CABLE_D))
-    disc = disc.cut(ribbon(path, (CABLE_D + CLR_RAD) / 2.0,
-                           DISC_T - CABLE_D - CLR_AX, DISC_T + 1.0))
-    pocket = Part.makeBox(CONN_L, CONN_W, CONN_H + 1.0,
-                          V(0.0, -CONN_W / 2.0, DISC_T - CONN_H))
-    pocket.rotate(O, Z, pocket_a)       # laid along the way the channel arrives
-    pocket.translate(V(path[-1][0], path[-1][1], 0))
-    return disc.cut(pocket)
+        return body.removeSplitter()
+    d = geo["offset"]
+    x0 = geo["entry_x"]
+    hw = CONN_W / 2.0
+    loop = [V(x0, d + hw, -1.0), V(x0, d - hw, -1.0),
+            V(x0 - CONN_L, d - hw, -1.0), V(x0 - CONN_L, d + hw, -1.0)]
+    loop.append(loop[0])
+    pocket = Part.Face(Part.makePolygon(loop)).extrude(V(0, 0, CONN_H + 1.0))
+    reach = math.sqrt(max(1.0, (geo["rot_r"] + 2.0) ** 2 - d ** 2))
+    chan = ribbon(run_path(geo, reach, x0), (CABLE_D + CLR) / 2.0,
+                  -1.0, CABLE_D + CLR + 1.0)
+    return body.cut(pocket.fuse(chan)).removeSplitter()
 
 
-r_dowel = (PIN_D / 2.0 + BARB_H + Rrec) / 2.0
+# ------------------------------------------------------------------ checks
 
-log("building ...")
-half_a = make_half(True)
-half_b = make_half(False)
-disc = make_disc()
-def hanging(shape, up, bed_z):
-    """Total area of surfaces that would face the bed across open air - the
-    spec's one unbreakable rule is that nothing needs support. `up` is which
-    way the part points while printing, in this part's own z."""
-    total, worst = 0.0, (0.0, 0.0)
+def hanging(shape, bed_z, up):
+    """Area of faces steeper than 45 deg overhang, off the bed. Rule 4."""
+    total = 0.0
+    worst = None
     for f in shape.Faces:
         try:
-            n = f.normalAt(*f.Surface.parameter(f.CenterOfMass))
+            u0, u1, v0, v1 = f.ParameterRange
+            n = f.normalAt((u0 + u1) / 2.0, (v0 + v1) / 2.0)
         except Exception:
             continue
-        if n.z * (-up) > 0.95 and abs(f.CenterOfMass.z - bed_z) > 1e-6:
-            total += f.Area
-            if f.Area > worst[0]:
-                worst = (f.Area, f.CenterOfMass.z)
-    return total, worst
+        d = n.z * up
+        if d < -0.7071:
+            com = f.CenterOfMass
+            if abs(com.z - bed_z) > 0.05:
+                total += f.Area
+                if worst is None or f.Area > worst:
+                    worst = f.Area
+    return total, (worst or 0.0)
 
 
-for name, sh in (("half_a", half_a), ("half_b", half_b), ("disc", disc)):
-    if not sh.isValid() or len(sh.Solids) != 1:
-        warn("%s came out %s with %d solids"
-             % (name, "valid" if sh.isValid() else "INVALID", len(sh.Solids)))
-    up, bed = (-1, Hh) if name != "disc" else (1, 0.0)
-    total, (wa, wz) = hanging(sh, up, bed)
-    if total > 1.0:
-        say = log if (name == "disc" and abs(bed - wz) <= RING_H + 1e-6) else warn
-        say("%s has %.0f mm2 of unsupported surface, biggest %.0f mm2 at "
-            "%.1f mm above the bed" % (name, total, wa, abs(bed - wz)))
+# ------------------------------------------------------------------ report
 
-doc = App.ActiveDocument or App.newDocument("Cievka")
-gap = EXPLODE
+def echo(geo, half_h, parts):
+    bend_r = MIN_BEND_N * CABLE_D
+    cap, layers, per_layer = capacity(geo, half_h)
+    log("=" * 62)
+    log("CONNECTOR -> DIAMETER")
+    log("  connector          %.1f x %.1f x %.1f mm" % (CONN_L, CONN_W, CONN_H))
+    log("  its own diagonal   r %.2f  (what the carrier must contain)" % geo["corner"])
+    log("  carrier            r %.2f  (D %.2f), %.1f thick"
+        % (geo["rot_r"], 2 * geo["rot_r"], ROT_T))
+    log("  bore               r %.2f  (carrier + %.2f clearance)" % (geo["bore_r"], CLR))
+    log("  V-bead             %.3f proud, flank %.0f deg, apex at r %.3f"
+        % (geo["bead_h"], BEAD_ANGLE, geo["bore_r"] + geo["bead_h"]))
+    log("  drum               r %.3f  (apex + %.2f wall)" % (geo["drum_r"], WALL))
+    log("  rim                r %.3f  (D %.2f)" % (geo["flange_r"], 2 * geo["flange_r"]))
+    log("")
+    log("CABLE -> HEIGHT")
+    log("  cable              %.1f dia, %.0f long" % (CABLE_D, CABLE_LEN))
+    log("  groove             %.1f deep x %.1f wide, %d layers x %d turns"
+        % (GROOVE_DEPTH, groove_width(geo, half_h), layers, per_layer))
+    log("  holds              %.0f mm at %.0f%% packing   (%+.0f mm)"
+        % (cap, PACK_EFF * 100, cap - CABLE_LEN))
+    bore_d = min(ROT_T + CLR_AX, half_h - WEB_T)
+    log("  height             %.2f  (half %.2f, bore %.2f deep, web %.2f)"
+        % (2 * half_h, half_h, bore_d, WEB_T))
+    log("  groove share       %.0f%% of the height"
+        % (100.0 * groove_width(geo, half_h) / (2 * half_h)))
+    log("")
+    log("CABLE PATH")
+    log("  exits              %d round the face, %.2f wide, %.1f deep"
+        % (NOTCH_COUNT, CABLE_D + CLR, NOTCH_D))
+    log("  run                straight, %.2f off centre, %.1f deg off radial"
+        % (abs(geo["offset"]), geo["exit_angle"]))
+    log("  turn out of groove on the R %.1f fillet, not in the slot" % GROOVE_DEPTH)
+    log("                     wants R %.1f (%.1f x cable) - %s"
+        % (bend_r, MIN_BEND_N,
+           "fillet is big enough" if GROOVE_DEPTH >= bend_r else
+           "raise GROOVE_DEPTH to %.1f for that" % bend_r))
+    if NOTCH_D <= FLANGE_T:
+        warn("notch %.1f deep does not clear the %.1f rim - the cable cannot "
+             "get out" % (NOTCH_D, FLANGE_T))
+    log("")
+    log("PRINT (rule 4: no supports)")
+    for name, shape, bed, up in parts:
+        area, worst = hanging(shape, bed, up)
+        log("  %-10s %s  unsupported %.0f mm2%s"
+            % (name, "single solid" if len(shape.Solids) == 1 and shape.isValid()
+               else "!! NOT A SINGLE VALID SOLID",
+               area, "  (largest face %.0f)" % worst if worst else ""))
+    log("=" * 62)
 
 
-def add(name, shape, placement=None):
-    o = doc.addObject("Part::Feature", name)
-    o.Shape = shape
-    if placement is not None:
-        o.Placement = placement
-    return o
+# ------------------------------------------------------------------ main
+
+def main():
+    if USE_DIALOG and App.GuiUp:
+        ask_values()
+    g = globals()
+    g["NOTCH_COUNT"] = int(round(NOTCH_COUNT))
+    g["DOWEL_COUNT"] = int(round(DOWEL_COUNT))
+
+    geo = solve_radii()
+    half_h = solve_height(geo)
+
+    half = build_half(geo, half_h)
+    carrier = build_carrier(geo)
+
+    parts = [("half", half, 0.0, 1.0), ("carrier", carrier, ROT_T, -1.0)]
+    echo(geo, half_h, parts)
+
+    doc = App.ActiveDocument or App.newDocument("Cievka")
+    for o in list(doc.Objects):
+        if o.Name.startswith(("Cievka", "Kotuc")):
+            doc.removeObject(o.Name)
+
+    e = EXPLODE
+    placed = []
+    a = half.copy()
+    a.translate(V(0, 0, 0))
+    placed.append(("Cievka_A", a))
+    b = half.copy()
+    b.rotate(V(0, 0, 0), V(1, 0, 0), 180)
+    b.translate(V(0, 0, 2 * half_h))
+    placed.append(("Cievka_B", b))
+    c = carrier.copy()
+    c.translate(V(0, 0, -e))
+    placed.append(("Kotuc_A", c))
+    d = carrier.copy()
+    d.rotate(V(0, 0, 0), V(1, 0, 0), 180)
+    d.translate(V(0, 0, 2 * half_h + e))
+    placed.append(("Kotuc_B", d))
+
+    for name, shp in placed:
+        o = doc.addObject("Part::Feature", name)
+        o.Shape = shp
+    doc.recompute()
+    if App.GuiUp:
+        import FreeCADGui
+        FreeCADGui.SendMsgToActiveView("ViewFit")
+    return doc
 
 
-add("half_a", half_a)
-b = half_b.copy()
-b.rotate(O, V(1, 0, 0), 180)
-b.translate(V(0, 0, -gap))
-add("half_b", b)
-for tag, flip in (("disc_bottom", False), ("disc_top", True)):
-    s = disc.copy()
-    if flip:
-        s.translate(V(0, 0, z_disc_top - DISC_T + gap))
-    else:
-        s.rotate(O, V(1, 0, 0), 180)
-        s.translate(V(0, 0, -(z_disc_top - DISC_T) - gap))
-    add(tag, s)
-
-doc.recompute()
 try:
-    import FreeCADGui
-    FreeCADGui.SendMsgToActiveView("ViewFit")
-except Exception:
-    pass
-
-log("DONE  hub %.1f  outer %.1f  total height %.1f mm"
-    % (hub_d, 2 * Rf, 2 * Hh))
-log("holds about %.0f mm of %.1f mm cable (%.1f turns)"
-    % (capacity, CABLE_D, n_turns))
-log("disc %.1f across, pocket %.0f x %.0f x %.0f, %d notches in the flange"
-    % (2 * Rd, CONN_L, CONN_W, CONN_H, NOTCH_COUNT))
-log("-> print each part on its flat face, no supports; brim under the discs")
+    main()
+except Cancelled:
+    log("cancelled")
