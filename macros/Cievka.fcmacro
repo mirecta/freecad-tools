@@ -21,12 +21,14 @@ from the cable instead is what leaves the carrier too small for the plug.
     half height    = the groove width the cable needs + rim + fillet
 
 The carrier is held by a V bead round its edge, snapping into a matching V
-groove in the bore wall. The two halves are the same part printed twice, mated
-by dowels that alternate pin, hole, pin, hole round the parting plane.
+groove in the bore wall. The two halves snap together on flat tabs in the drum
+wall: flat so they can spring, and landed on the notch grid so the two halves
+of every notch line up and the cable has somewhere to come out.
 
-Parts, each printed twice, both needing no support:
-    half     - outer face on the bed
-    carrier  - back on the bed, pocket facing up
+Parts, none needing support:
+    half A   - outer face on the bed, tabs pointing up
+    half B   - outer face on the bed, slots opening up
+    carrier  - x2, back on the bed, pocket facing up
 
 All dimensions in mm.
 """
@@ -60,14 +62,22 @@ NOTCH_D         = 4.0     # how deep a notch cuts into the face
 ROT_T           = 8.0     # carrier thickness; the bead sits at half of it
 BEAD_ANGLE      = 15.0    # bead flank, from the axis; sets how far it stands out
 
-# =================== 5. HALVES JOINT ================================
-DOWEL_COUNT     = 3       # pins, and as many holes, so both halves are the
-DOWEL_D         = 3.0     # same part printed twice
-DOWEL_LEN       = 3.0
+# =================== 5. HALVES JOINT (snap tabs) ====================
+TAB_COUNT       = 3       # flat tabs on half A, slots on half B
+TAB_W           = 9.0     # circumferential - this is what stops rotation
+TAB_T           = 1.8     # radial - thin, so the tab can spring
+TAB_H           = 5.0     # how far it stands above the parting plane
+TAB_WALL        = 1.2     # material outside the tab, and inside the slot
+BARB_H          = 0.7     # how far the barb stands proud, radially
+BARB_LOCK       = 1.2     # how much of the barb is full height
 
 # =================== 6. FITS ========================================
 CLR             = 0.5     # the doc's "tolerancia" - carrier in the bore
-CLR_AX          = 0.3
+CLR_AX          = 0.3     # axial
+CLR_RAD         = 0.35    # radial, where a tab slides into a slot
+CLR_TAN         = 0.15    # circumferential - this one sets how far the
+                          # halves can twist, so the notches stay lined up
+LEDGE_PLAY      = 0.10    # how far the joint can rattle open once snapped
 MIN_BEND_N      = 4.5     # bend radius of the winding = CABLE_D * this
 EXIT_OFFSET     = 0.0     # >0 swings the exit off radial, paid for in
                           # diameter; 0 is the straight radial run
@@ -303,32 +313,73 @@ def ribbon(pts, half_w, z0, z1):
     return Part.Face(Part.makePolygon(loop)).extrude(V(0, 0, z1 - z0))
 
 
-PIN_WALL = 1.2     # material either side of a dowel
+def barb_lead():
+    """The barb ramps back in at 45 deg, so it prints without support."""
+    return BARB_H
 
 
-def pin_radius(geo):
-    """Dowels sit in the drum wall, measured in from the drum.
+def tab_radius(geo):
+    """Tabs sit in the drum wall, measured in from the drum.
 
-    Splitting the difference between bore and drum instead would put them in a
-    wall barely thicker than the dowel itself, leaving a tenth of a millimetre
-    of plastic round each one.
+    Splitting the difference between bore and drum instead puts them in a wall
+    barely thicker than the tab, leaving a tenth of a millimetre of plastic
+    round each one.
     """
-    return geo["drum_r"] - PIN_WALL - (DOWEL_D + CLR_AX) / 2.0
+    return geo["drum_r"] - TAB_WALL - CLR_RAD - BARB_H - TAB_T / 2.0
 
 
 def cavity_radius(geo):
-    return pin_radius(geo) - (DOWEL_D + CLR_AX) / 2.0 - PIN_WALL
+    """Leave the tab room to spring inwards, and a wall inside that."""
+    return tab_radius(geo) - TAB_T / 2.0 - BARB_H - CLR_RAD - TAB_WALL
 
 
-def dowel_angles():
-    n = int(round(DOWEL_COUNT))
-    step = 180.0 / n
-    pins = [step / 2.0 + k * 2.0 * step for k in range(n)]
-    holes = [3.0 * step / 2.0 + k * 2.0 * step for k in range(n)]
-    return pins, holes
+def tab_angles(mirror=False):
+    """Put the tabs on the notch grid.
+
+    Whatever holds the halves together also fixes which way round they go, and
+    if it lands between notches then the two halves of every notch are offset
+    and the cable has nowhere to come out.
+    """
+    n = max(1, int(round(TAB_COUNT)))
+    step = 360.0 / NOTCH_COUNT
+    out = []
+    for k in range(n):
+        a = round(k * NOTCH_COUNT / float(n)) * step
+        out.append(-a if mirror else a)
+    return out
 
 
-def build_half(geo, half_h):
+def tab_solid(geo, half_h):
+    """The tab and its barb, standing on the parting plane at angle 0."""
+    r0 = tab_radius(geo) - TAB_T / 2.0
+    r1 = tab_radius(geo) + TAB_T / 2.0
+    body = Part.makeBox(TAB_T, TAB_W, TAB_H, V(r0, -TAB_W / 2.0, half_h))
+    lead = barb_lead()
+    z0 = half_h + TAB_H - BARB_LOCK - lead
+    prof = [V(r1, 0, z0), V(r1 + BARB_H, 0, z0),
+            V(r1 + BARB_H, 0, z0 + BARB_LOCK), V(r1, 0, z0 + BARB_LOCK + lead)]
+    prof.append(prof[0])
+    barb = Part.Face(Part.makePolygon(prof)).extrude(V(0, TAB_W, 0))
+    barb.translate(V(0, -TAB_W / 2.0, 0))
+    return body.fuse(barb)
+
+
+def slot_solid(geo, half_h):
+    """The pocket that swallows a tab, with the ledge its barb catches on."""
+    r0 = tab_radius(geo) - TAB_T / 2.0 - BARB_H - CLR_RAD
+    r1 = tab_radius(geo) + TAB_T / 2.0 + CLR_RAD
+    w = TAB_W + 2 * CLR_TAN
+    depth = TAB_H + CLR_AX
+    slot = Part.makeBox(r1 - r0, w, depth + 1.0,
+                        V(r0, -w / 2.0, half_h - depth))
+    ledge_z = half_h - TAB_H + BARB_LOCK + barb_lead() + LEDGE_PLAY
+    relief = Part.makeBox(BARB_H, w, ledge_z - (half_h - depth),
+                          V(r1, -w / 2.0, half_h - depth))
+    return slot.fuse(relief)
+
+
+def build_half(geo, half_h, tabs=True):
+    """Half A carries the tabs, half B the slots (spec 5.2 - not identical)."""
     body = revolve(half_profile(geo, half_h))
     reach = math.sqrt(max(1.0, (geo["flange_r"] + 3.0) ** 2 - geo["offset"] ** 2))
     slot = ribbon(run_path(geo, reach, -geo["bore_r"] + 2.0),
@@ -339,17 +390,14 @@ def build_half(geo, half_h):
         c.rotate(V(0, 0, 0), V(0, 0, 1), 360.0 * i / NOTCH_COUNT)
         cuts.append(c)
     body = body.cut(Part.makeCompound(cuts))
-    pin_r = pin_radius(geo)
-    pins, holes = dowel_angles()
-    add, sub = [], []
-    for a in pins:
-        p = V(pin_r * math.cos(math.radians(a)), pin_r * math.sin(math.radians(a)), half_h)
-        add.append(Part.makeCylinder(DOWEL_D / 2.0, DOWEL_LEN, p))
-    for a in holes:
-        p = V(pin_r * math.cos(math.radians(a)), pin_r * math.sin(math.radians(a)),
-              half_h - DOWEL_LEN - 0.4)
-        sub.append(Part.makeCylinder((DOWEL_D + CLR_AX) / 2.0, DOWEL_LEN + 0.5, p))
-    body = body.cut(Part.makeCompound(sub)).fuse(Part.makeCompound(add))
+    one = tab_solid(geo, half_h) if tabs else slot_solid(geo, half_h)
+    parts = []
+    for a in tab_angles(mirror=not tabs):
+        c = one.copy()
+        c.rotate(V(0, 0, 0), V(0, 0, 1), a)
+        parts.append(c)
+    pile = Part.makeCompound(parts)
+    body = body.fuse(pile) if tabs else body.cut(pile)
     return body.removeSplitter()
 
 
@@ -452,15 +500,17 @@ def main():
         ask_values()
     g = globals()
     g["NOTCH_COUNT"] = int(round(NOTCH_COUNT))
-    g["DOWEL_COUNT"] = int(round(DOWEL_COUNT))
+    g["TAB_COUNT"] = int(round(TAB_COUNT))
 
     geo = solve_radii()
     half_h = solve_height(geo)
 
-    half = build_half(geo, half_h)
+    half_a = build_half(geo, half_h, tabs=True)
+    half_b = build_half(geo, half_h, tabs=False)
     carrier = build_carrier(geo)
 
-    parts = [("half", half, 0.0, 1.0), ("carrier", carrier, ROT_T, -1.0)]
+    parts = [("half A", half_a, 0.0, 1.0), ("half B", half_b, 0.0, 1.0),
+             ("carrier", carrier, ROT_T, -1.0)]
     echo(geo, half_h, parts)
 
     doc = App.ActiveDocument or App.newDocument("Cievka")
@@ -470,10 +520,9 @@ def main():
 
     e = EXPLODE
     placed = []
-    a = half.copy()
-    a.translate(V(0, 0, 0))
+    a = half_a.copy()
     placed.append(("Cievka_A", a))
-    b = half.copy()
+    b = half_b.copy()
     b.rotate(V(0, 0, 0), V(1, 0, 0), 180)
     b.translate(V(0, 0, 2 * half_h))
     placed.append(("Cievka_B", b))
