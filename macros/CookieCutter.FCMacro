@@ -30,6 +30,26 @@
 #  3. Click [Generate].  The dialog stays open — change a value and generate
 #     again, the previous result is replaced.
 #
+#  SEVERAL CURVES
+#  --------------
+#  Curves must not cross.  A curve inside another one is an inner knife:
+#
+#    cutting (default)  it cuts a hole.  Its profile comes out mirrored, the
+#                       straight side still facing the cookie and the wall
+#                       standing in the scrap.
+#    imprint only       it presses a line into the dough instead: a blunt wall
+#                       of the full width F, centred on the curve and shorter
+#                       than the cutting knives by a set amount.
+#
+#  Open lines are always walls centred on the line.
+#
+#  The knives are tied together on the flange side, either by bridges — flat
+#  bars as thick as the flange, laid across the cookie where the knives come
+#  closest, a set number to each knife and spread round it — or by a full
+#  plate over the whole cookie.  Joined that way, the
+#  centred walls have no flange of their own; the bridges or the plate carry
+#  them.
+#
 #  TIGHT CURVES
 #  ------------
 #  Sweeping the profile along the curve folds over itself wherever the curve
@@ -311,10 +331,64 @@ def profile_points(A, B, C, D, E, F):
     return out
 
 
+class MeshPool:
+    """Points and facets of the whole cutter.  Every part writes into the same
+    pool, so parts that meet share their points and the mesh closes up."""
+
+    def __init__(self):
+        self.points = []
+        self.facets = []
+        self._index = {}
+
+    def vertex(self, x, y, z):
+        key = (x, y, round(z, GRID))
+        i = self._index.get(key)
+        if i is None:
+            i = self._index[key] = len(self.points)
+            self.points.append(V(x, y, z))
+        return i
+
+    def quad(self, p, q, z0, z1):
+        """Vertical face over the edge p -> q; with z0 < z1 it faces right"""
+        a = self.vertex(p[0], p[1], z0)
+        b = self.vertex(q[0], q[1], z0)
+        c = self.vertex(q[0], q[1], z1)
+        e = self.vertex(p[0], p[1], z1)
+        self.facets.append((a, b, c))
+        self.facets.append((a, c, e))
+
+    def flat(self, loops, z, up):
+        """Level face over the even-odd region of the loops"""
+        if not loops:
+            return
+        known = set(p for lp in loops for p in lp)
+        for face in region_faces(loops):
+            fpts, ftris = face.tessellate(1.0)
+            ids = []
+            for p in fpts:
+                xy = (round(p.x, GRID), round(p.y, GRID))
+                if xy not in known:
+                    raise CutterError(
+                        "Triangulation added a point off the contours "
+                        "({:.4f}, {:.4f}).".format(p.x, p.y))
+                ids.append(self.vertex(xy[0], xy[1], z))
+            for a, b, c in ftris:
+                pa, pb, pc = fpts[a], fpts[b], fpts[c]
+                ccw = ((pb.x - pa.x) * (pc.y - pa.y)
+                       - (pb.y - pa.y) * (pc.x - pa.x)) > 0
+                self.facets.append((ids[a], ids[b], ids[c]) if ccw == up else
+                                   (ids[a], ids[c], ids[b]))
+
+    def mesh(self):
+        if not self.facets:
+            raise CutterError("Nothing to build — the offsets came out empty.")
+        return Mesh.Mesh((self.points, self.facets))
+
+
 class CutterBuilder:
 
     def __init__(self, loops, inside=False, defl=0.02, steps=6, engine=None,
-                 is_open=False):
+                 is_open=False, pool=None):
         clean = clean_path if is_open else clean_loop
         loops = [lp for lp in (clean(l) for l in loops) if lp]
         if not loops:
@@ -328,13 +402,17 @@ class CutterBuilder:
         self.engine = make_engine(loops, defl, is_open, engine)
         self._levels = {}
         self._grid = None
-        self._index = {}
-        self.points = []
-        self.facets = []
+        self.pool = pool or MeshPool()
+        self.facets = self.pool.facets
+        self._vertex = self.pool.vertex
+        self.covered = {}       # level -> contour edges a bridge is joined to
+        self.floor = 0.0        # ...and the height the bridges reach up to
 
     def contour(self, d):
         """Boundary of everything within d of the cookie (of the line, when
-        it is open), solid side on the left"""
+        it is open), solid side on the left.  None stands for no contour."""
+        if d is None:
+            return []
         key = round(d, 7)
         if key not in self._levels:
             raw = self.engine.offset(-key if self.inside else key)
@@ -344,25 +422,26 @@ class CutterBuilder:
             self._levels[key] = loops
         return self._levels[key]
 
-    def _vertex(self, x, y, z):
-        key = (x, y, round(z, GRID))
-        i = self._index.get(key)
-        if i is None:
-            i = self._index[key] = len(self.points)
-            self.points.append(V(x, y, z))
-        return i
-
     def wall(self, d, z0, z1):
-        """Vertical face on contour d; faces away from the solid when z0 < z1"""
+        """Vertical face on contour d; faces away from the solid when z0 < z1.
+        Where a bridge is joined on, the wall starts above the bridge."""
+        covered = self.covered.get(round(d, 7), ())
+        lo, hi = min(z0, z1), max(z0, z1)
+        split = bool(covered) and lo + EPS < self.floor < hi - EPS
         for lp in self.contour(d):
             for i in range(len(lp)):
-                (px, py), (qx, qy) = lp[i - 1], lp[i]
-                a = self._vertex(px, py, z0)
-                b = self._vertex(qx, qy, z0)
-                c = self._vertex(qx, qy, z1)
-                e = self._vertex(px, py, z1)
-                self.facets.append((a, b, c))
-                self.facets.append((a, c, e))
+                p, q = lp[i - 1], lp[i]
+                if (p, q) in covered:
+                    if hi <= self.floor + EPS:
+                        continue
+                    a, b = (self.floor, z1) if z0 < z1 else (z0, self.floor)
+                    self.pool.quad(p, q, a, b)
+                elif split:
+                    # same points along the top of the bridges as on them
+                    self.pool.quad(p, q, z0, self.floor)
+                    self.pool.quad(p, q, self.floor, z1)
+                else:
+                    self.pool.quad(p, q, z0, z1)
 
     def band(self, d0, z0, d1, z1, up):
         """Face between contours d0 and d1, each at its own height"""
@@ -397,8 +476,11 @@ class CutterBuilder:
                             (ids[a], ids[c], ids[b]))
         if abs(z0 - z1) > EPS:
             tris = self._follow_distance(pts, index, tris, min(d0, d1), max(d0, d1))
-        slope = (z1 - z0) / (d1 - d0)
-        ids = [self._vertex(x, y, z0 + (d - d0) * slope) for x, y, d in pts]
+        if abs(z0 - z1) > EPS:
+            slope = (z1 - z0) / (d1 - d0)
+            ids = [self._vertex(x, y, z0 + (d - d0) * slope) for x, y, d in pts]
+        else:
+            ids = [self._vertex(x, y, z0) for x, y, _d in pts]
         for a, b, c in tris:
             if up:
                 self.facets.append((ids[a], ids[b], ids[c]))
@@ -542,42 +624,404 @@ class CutterBuilder:
             tris = out
         return tris
 
-    def build(self, profile):
-        n = len(profile)
-        for i in range(n):
-            (da, za), (db, zb) = profile[i], profile[(i + 1) % n]
-            if abs(da - db) < EPS:
+    def build(self, chain, closed=True):
+        """Walk the profile outline, given as (distance, height) corners
+        counter-clockwise, and put a face on each of its sides"""
+        chain = [p for i, p in enumerate(chain) if i == 0 or p != chain[i - 1]]
+        n = len(chain)
+        for i in range(n if closed else n - 1):
+            (da, za), (db, zb) = chain[i], chain[(i + 1) % n]
+            if da is not None and db is not None and abs(da - db) < EPS:
                 self.wall(da, za, zb)
                 continue
-            k = self.steps if abs(za - zb) > EPS else 1
-            for j in range(k):
-                t0, t1 = j / float(k), (j + 1) / float(k)
+            up = da is not None and (db is None or db < da)
+            if abs(za - zb) < EPS:
+                self.band(da, za, db, zb, up)
+                continue
+            for j in range(self.steps):
+                t0, t1 = j / float(self.steps), (j + 1) / float(self.steps)
                 self.band(da + (db - da) * t0, za + (zb - za) * t0,
-                          da + (db - da) * t1, za + (zb - za) * t1,
-                          up=db < da)
-        if not self.facets:
-            raise CutterError("Nothing to build — the offsets came out empty.")
-        mesh = Mesh.Mesh((self.points, self.facets))
-        if mesh.Volume < 0:
-            mesh.flipNormals()
-        return mesh
+                          da + (db - da) * t1, za + (zb - za) * t1, up)
+
+
+# ── bridges ───────────────────────────────────────────────────────────────────
+
+def _cross(o, a, b):
+    return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+
+def _segments_cross(p1, p2, p3, p4):
+    d1, d2 = _cross(p3, p4, p1), _cross(p3, p4, p2)
+    d3, d4 = _cross(p1, p2, p3), _cross(p1, p2, p4)
+    return ((d1 > 0) != (d2 > 0)) and ((d3 > 0) != (d4 > 0))
+
+
+class Rim:
+    """One loop the bridges may be joined to: an edge of the cookie, or the
+    foot of an inner wall.  Runs with the open cookie area on its left."""
+
+    def __init__(self, builder, level, index, flip):
+        self.builder, self.key, self.index, self.flip = \
+            builder, round(level, 7), index, flip
+        lp = builder.contour(level)[index]
+        self.loop = lp[::-1] if flip else list(lp)
+        self.cum = [0.0]
+        for i in range(len(self.loop)):
+            (x1, y1), (x2, y2) = self.loop[i], self.loop[(i + 1) % len(self.loop)]
+            self.cum.append(self.cum[-1] + math.hypot(x2 - x1, y2 - y1))
+        self.length = self.cum[-1]
+        self.cuts = []          # arc positions where bridge sides land
+        self.taken = []         # (start, end) arcs already under a bridge
+
+    def at(self, s):
+        s %= self.length
+        lo, hi = 0, len(self.loop)
+        while hi - lo > 1:
+            mid = (lo + hi) // 2
+            if self.cum[mid] <= s:
+                lo = mid
+            else:
+                hi = mid
+        (x1, y1), (x2, y2) = self.loop[lo], self.loop[(lo + 1) % len(self.loop)]
+        f = (s - self.cum[lo]) / max(self.cum[lo + 1] - self.cum[lo], 1e-12)
+        return (x1 + (x2 - x1) * f, y1 + (y2 - y1) * f)
+
+    def free(self, s0, s1):
+        """Is the arc s0..s1 clear of the bridges already here?"""
+        for t0, t1 in self.taken:
+            for shift in (-self.length, 0.0, self.length):
+                if s0 + shift < t1 and t0 < s1 + shift:
+                    return False
+        return True
+
+    def insert_cuts(self):
+        """Add the landing points to the loop; returns position -> index"""
+        out, where = [], {}
+        n = len(self.loop)
+        for k in range(n):
+            out.append(self.loop[k])
+            base = len(out) - 1
+            (x1, y1), (x2, y2) = self.loop[k], self.loop[(k + 1) % n]
+            seg = self.cum[k + 1] - self.cum[k]
+            for s in sorted(c % self.length for c in set(self.cuts)):
+                if not (self.cum[k] <= s < self.cum[k + 1]):
+                    continue
+                if s - self.cum[k] < 1e-3:
+                    where[s] = base
+                elif self.cum[k + 1] - s < 1e-3:
+                    where[s] = -(k + 1)     # the next original point
+                else:
+                    f = (s - self.cum[k]) / seg
+                    pt = (round(x1 + (x2 - x1) * f, GRID),
+                          round(y1 + (y2 - y1) * f, GRID))
+                    if pt != out[-1]:
+                        out.append(pt)
+                    where[s] = len(out) - 1
+        starts = {}
+        j = 0
+        for k in range(n):                  # where the original points ended up
+            while out[j] != self.loop[k]:
+                j += 1
+            starts[k] = j
+            j += 1
+        for s, i in list(where.items()):
+            if i < 0:
+                where[s] = starts[(-i) % n]
+        self.loop = out
+        stored = out[::-1] if self.flip else out
+        self.builder._levels[self.key][self.index] = stored
+        return where
+
+    def arc(self, i0, i1):
+        pts = [self.loop[i0]]
+        i = i0
+        while i != i1:
+            i = (i + 1) % len(self.loop)
+            pts.append(self.loop[i])
+        return pts
+
+
+def _nearest(p, rim, around=None, reach=0):
+    """Point of the rim nearest to p: (distance squared, its index)"""
+    n = len(rim.loop)
+    step = max(1, n // 150)
+    span = range(0, n, step) if around is None else \
+        range(around - reach, around + reach + 1)
+    best = (1e300, 0)
+    for j in span:
+        q = rim.loop[j % n]
+        d = (p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2
+        if d < best[0]:
+            best = (d, j % n)
+    if around is None and step > 1:
+        return _nearest(p, rim, best[1], step)
+    return best
+
+
+def _crossings(a, b):
+    """Places to bridge two rims, nearest first: (distance, position on a,
+    position on b).  The closest pair of points, and for a choice a dozen more
+    spread round each rim — the closest spot is not always one a bar fits on,
+    the round end of a thin wall for one."""
+    found = []
+    for src, dst, swap in ((a, b, False), (b, a, True)):
+        n = len(src.loop)
+        for i in range(0, n, max(1, n // 12)):
+            d, j = _nearest(src.loop[i], dst)
+            d2, i2 = _nearest(dst.loop[j], src)     # slide to the foot of it
+            if d2 < d:
+                d, i = d2, i2
+            pair = (src.cum[i], dst.cum[j])
+            found.append((math.sqrt(d),) + (pair[::-1] if swap else pair))
+    found.sort()
+    return found
+
+
+def add_bridges(pool, rims, width, thickness, count=3):
+    """Join the rims into one piece with flat bars across the cookie area, the
+    shortest ones that fit, `count` to a knife.  Returns their number."""
+    every = [seg for r in rims for seg in zip(r.loop, r.loop[1:] + r.loop[:1])]
+
+    def in_cookie(p):
+        return sum(1 for r in rims if point_in_loop(p, r.loop)) % 2 == 1
+
+    def clear(p, q, sides):
+        """Does the bar side p -> q stay within the cookie area?"""
+        a = (p[0] + (q[0] - p[0]) * 1e-4, p[1] + (q[1] - p[1]) * 1e-4)
+        b = (q[0] + (p[0] - q[0]) * 1e-4, q[1] + (p[1] - q[1]) * 1e-4)
+        if not in_cookie((0.5 * (p[0] + q[0]), 0.5 * (p[1] + q[1]))):
+            return False
+        return not any(_segments_cross(a, b, c, d) for c, d in every + sides)
+
+    links = []
+    for i in range(len(rims)):
+        for j in range(i + 1, len(rims)):
+            spots = _crossings(rims[i], rims[j])
+            links.append((spots[0][0], i, j, spots))
+    links.sort()
+    group = list(range(len(rims)))
+
+    def find(i):
+        while group[i] != i:
+            i = group[i]
+        return i
+
+    bars, sides = [], []
+    def fit(a, b, spots, narrowest=0.25):
+        """The widest bar that fits, on the nearest spot it fits on"""
+        full = min(width, a.length / 3.0, b.length / 3.0)
+        for w in (full, 0.5 * full, 0.25 * full):
+            if w < narrowest * full:
+                break
+            for dist, sa, sb in spots:
+                if dist > 3.0 * spots[0][0] + width:
+                    break
+                a0, a1, b0, b1 = sa - 0.5 * w, sa + 0.5 * w, sb - 0.5 * w, sb + 0.5 * w
+                pa0, pa1, pb0, pb1 = a.at(a0), a.at(a1), b.at(b0), b.at(b1)
+                if (a.free(a0, a1) and b.free(b0, b1)
+                        and not _segments_cross(pa0, pb1, pb0, pa1)
+                        and clear(pa0, pb1, sides) and clear(pb0, pa1, sides)):
+                    return a0, a1, b0, b1, pa0, pa1, pb0, pb1
+        return None
+
+    def lay(a, b, bar):
+        a0, a1, b0, b1, pa0, pa1, pb0, pb1 = bar
+        a.taken.append((a0, a1))
+        b.taken.append((b0, b1))
+        a.cuts.extend((a0, a1))
+        b.cuts.extend((b0, b1))
+        sides.extend(((pa0, pb1), (pb0, pa1)))
+        bars.append((a, a0, a1, b, b0, b1))
+
+    # first the fewest that make it one piece, shortest first...
+    for _dist, i, j, spots in links:
+        if find(i) == find(j):
+            continue
+        bar = fit(rims[i], rims[j], spots)
+        if bar is not None:
+            lay(rims[i], rims[j], bar)
+            group[find(i)] = find(j)
+
+    # ...then more, until every knife is held in `count` places: on one bar
+    # alone it would swing.  Small knives first.  The knife is divided into
+    # `count` sectors from the bar it has, and each sector without one is
+    # searched from its middle outwards, for a full-width bar to whichever
+    # knife lies nearest there, and failing that for a narrower one.
+    def spread(rim, s):
+        """Distance along the rim from s to the nearest bar already on it"""
+        gaps = [abs((s - 0.5 * (t0 + t1) + 0.5 * rim.length) % rim.length
+                    - 0.5 * rim.length) for t0, t1 in rim.taken]
+        return min(gaps) if gaps else rim.length
+
+    def bar_near(i, target, sector):
+        rim = rims[i]
+        tries = []
+        for k in range(9):
+            s = target + 0.5 * sector * ((k + 1) // 2) / 4.5 * (-1 if k % 2 else 1)
+            p = rim.at(s)
+            others = []
+            for j, other in enumerate(rims):
+                if j != i:
+                    d, at = _nearest(p, other)
+                    others.append((math.sqrt(d), j, other.cum[at]))
+            others.sort()
+            tries.append((s, others[:3]))
+        for narrowest in (1.0, 0.5, 0.25):
+            for s, others in tries:
+                for d, j, sj in others:
+                    bar = fit(rim, rims[j], [(d, s, sj)], narrowest)
+                    if bar is not None:
+                        lay(rim, rims[j], bar)
+                        return True
+        return False
+
+    for i in sorted(range(len(rims)), key=lambda k: rims[k].length):
+        rim = rims[i]
+        sector = rim.length / float(count)
+        anchor = 0.5 * sum(rim.taken[0]) if rim.taken else 0.0
+        for k in range(0 if not rim.taken else 1, count):
+            if len(rim.taken) >= count:
+                break
+            target = anchor + k * sector
+            if spread(rim, target) > 0.5 * sector:
+                bar_near(i, target, sector)
+
+    where = dict((id(r), r.insert_cuts()) for r in rims if r.cuts)
+    made = 0
+    for a, a0, a1, b, b0, b1 in bars:
+        wa, wb = where[id(a)], where[id(b)]
+        arc_a = a.arc(wa[a0 % a.length], wa[a1 % a.length])
+        arc_b = b.arc(wb[b0 % b.length], wb[b1 % b.length])
+        bar = arc_a + arc_b
+        if len(arc_a) < 2 or len(arc_b) < 2 or len(set(bar)) != len(bar) \
+                or loop_area(bar) <= 1e-6:
+            continue
+        for rim, arc in ((a, arc_a), (b, arc_b)):
+            edges = rim.builder.covered.setdefault(rim.key, set())
+            for p, q in zip(arc, arc[1:]):
+                edges.add((p, q))
+                edges.add((q, p))
+            rim.builder.floor = thickness
+        pool.flat([bar], 0.0, up=False)
+        pool.flat([bar], thickness, up=True)
+        pool.quad(arc_a[-1], arc_b[0], 0.0, thickness)
+        pool.quad(arc_b[-1], arc_a[0], 0.0, thickness)
+        made += 1
+    return made
+
+
+# ── the whole cutter ──────────────────────────────────────────────────────────
+
+JOIN_NONE, JOIN_BRIDGES, JOIN_PLATE = 0, 1, 2
+
+
+def split_inner(loops):
+    """Loops that lie inside another one, and the rest"""
+    outer, inner = [], []
+    for i, lp in enumerate(loops):
+        depth = sum(1 for j, other in enumerate(loops)
+                    if j != i and point_in_loop(lp[0], other))
+        (inner if depth else outer).append(lp)
+    return outer, inner
 
 
 def build_cutter(loops, A, B, C, D, E, F, inside=False, defl=0.02, steps=6,
-                 engine=None, open_paths=()):
-    """Closed loops make one cutter around (or within) their region.  Open
-    paths get a wall centred on them, as a shell of its own in the same mesh"""
+                 engine=None, open_paths=(), join=JOIN_NONE, bridge_width=4.0,
+                 imprint=False, imprint_short=3.0, bridge_count=3):
+    """The whole cutter as one mesh.
+
+    Closed loops bound the cookie (even-odd: a loop inside another is a hole in
+    it), and the knives stand outside the cookie — so a knife on a hole comes
+    out mirrored by itself.  Open lines get a wall centred on them.  With
+    `imprint`, the inner loops stop being holes and turn into such centred
+    walls too, blunt and `imprint_short` lower: they press a line into the
+    dough instead of cutting through it.
+
+    `join` ties the knives together on the flange side, with bars across the
+    cookie or with a plate over all of it.
+    """
     profile = profile_points(A, B, C, D, E, F)
-    mesh = Mesh.Mesh()
-    if loops:
-        mesh.addMesh(CutterBuilder(loops, inside, defl, steps, engine).build(profile))
-    if open_paths:
-        # a centred wall cannot end in a knife edge, it needs a top to close on
-        tip = min(max(0.5 * E, 2.0 * defl), 0.5 * F)
-        half = profile_points(A, 0.5 * B, C, D, tip, 0.5 * F)
-        mesh.addMesh(CutterBuilder(open_paths, False, defl, steps, engine,
-                                   is_open=True).build(half))
+    loops = [lp for lp in (clean_loop(l) for l in loops) if lp]
+    lines = [lp for lp in (clean_path(l) for l in open_paths) if lp]
+    if imprint:
+        if not A - imprint_short > C + EPS:
+            raise CutterError("The imprint knives come out no taller than the "
+                              "flange — shorten them by less.")
+        loops, inner = split_inner(loops)
+        for lp in inner:        # two halves: a closed wire would count as an area
+            m = len(lp) // 2
+            lines.extend((lp[:m + 1], lp[m:] + lp[:1]))
+    if inside or C <= EPS or not loops:
+        join = JOIN_NONE
+
+    pool = MeshPool()
+    half = 0.5 * F
+    # a centred wall cannot end in a knife edge, it needs a top to close on
+    tip = min(max(0.5 * E, 2.0 * defl), half)
+    top = A - imprint_short if imprint else A
+    knives = CutterBuilder(loops, inside, defl, steps, engine, pool=pool) \
+        if loops else None
+    walls = CutterBuilder(lines, False, defl, steps, engine, is_open=True,
+                          pool=pool) if lines else None
+    bridges = 0
+
+    if join != JOIN_NONE and B > F + EPS:
+        # A cookie within a hole of another (the pupil of an eye) has nothing
+        # but scrap dough around it, and bridges only cross cookie.  So there
+        # the flange closes over the scrap: drop the edges it would have had.
+        flange = knives.contour(B)
+        inside_of = [[j for j, other in enumerate(flange)
+                      if j != i and point_in_loop(lp[0], other)]
+                     for i, lp in enumerate(flange)]
+        drop = set()
+        for i, parents in enumerate(inside_of):
+            if len(parents) % 2 == 1:           # the edge of a gap in the flange
+                islands = [j for j, pj in enumerate(inside_of)
+                           if i in pj and len(pj) == len(parents) + 1]
+                if islands:
+                    drop.update([i] + islands)
+        knives._levels[round(B, 7)] = [lp for i, lp in enumerate(flange)
+                                       if i not in drop]
+
+    if join == JOIN_BRIDGES:
+        rims = [Rim(knives, 0.0, i, False) for i in range(len(knives.contour(0.0)))]
+        if walls:
+            rims += [Rim(walls, half, i, True)
+                     for i in range(len(walls.contour(half)))]
+        bridges = add_bridges(pool, rims, bridge_width, C, bridge_count)
+
+    if knives:
+        if join == JOIN_PLATE:
+            wide = max(B, F)
+            knives.build([(None, 0.0), (wide, 0.0), (wide, C), (F, C), (F, C + D),
+                          (E, A), (0.0, A), (0.0, C)], closed=False)
+            pool.flat(knives.contour(0.0) + (walls.contour(half) if walls else []),
+                      C, up=True)
+        else:
+            knives.build(profile)
+    if walls:
+        if imprint:
+            shape = [(half, C), (half, top), (0.0, top)]
+        else:
+            shape = [(half, C), (half, C + D), (tip, A), (0.0, A)]
+        if join == JOIN_PLATE:
+            walls.build(shape, closed=False)
+        elif join == JOIN_BRIDGES:
+            # no flange of their own: the bridges carry them
+            walls.build([(0.0, 0.0), (half, 0.0)] + shape[1:])
+        elif imprint:
+            walls.build(profile_points(top, 0.5 * B, C, 0.0, half, half))
+        else:
+            walls.build(profile_points(A, 0.5 * B, C, D, tip, half))
+
+    mesh = pool.mesh()
+    if mesh.Volume < 0:
+        mesh.flipNormals()
     return mesh
+
+
+def mesh_pieces(mesh):
+    return mesh.countComponents()
 
 
 def mesh_report(mesh):
@@ -849,6 +1293,42 @@ def make_dialog(closed, opened):
             lf.addRow(self.check_flip)
             left.addWidget(place_grp)
 
+            many_grp = QtWidgets.QGroupBox("Several curves")
+            jf = QtWidgets.QFormLayout(many_grp)
+            self.combo_join = QtWidgets.QComboBox()
+            self.combo_join.addItems(["Not joined", "Bridges", "Full plate"])
+            self.combo_join.setCurrentIndex(self.prefs.GetInt("Join", JOIN_BRIDGES))
+            self.combo_join.setToolTip(
+                "How the knives are held together on the flange side.\n"
+                "Bridges: flat bars across the cookie, as thick as the flange.\n"
+                "Full plate: the flange closes over the whole cookie.")
+            self.spin_bridge = self._spin("BridgeWidth", 4.0, 0.5, 100.0, 0.5,
+                                          tip="Width of the bridges")
+            self.check_imprint = QtWidgets.QCheckBox("Inner curves only imprint")
+            self.check_imprint.setChecked(self.prefs.GetBool("Imprint", False))
+            self.check_imprint.setToolTip(
+                "Off: a curve inside another cuts a hole, with the profile\n"
+                "mirrored so that its straight side still faces the cookie.\n"
+                "On: inner curves press a line into the dough instead — a\n"
+                "blunt wall of the full width, centred on the curve, shorter.")
+            self.spin_short = self._spin("ImprintShort", 3.0, 0.1, 500.0, 0.5,
+                                         tip="How much lower the imprint knives "
+                                             "end than the cutting ones")
+            self.combo_join.currentIndexChanged.connect(self._on_changed)
+            self.check_imprint.toggled.connect(self._on_changed)
+            self.spin_count = QtWidgets.QSpinBox()
+            self.spin_count.setRange(1, 12)
+            self.spin_count.setValue(self.prefs.GetInt("BridgeCount", 3))
+            self.spin_count.setToolTip(
+                "Bridges holding each knife, spread round it.\n"
+                "On a single one a knife swings.")
+            jf.addRow("Joined by:", self.combo_join)
+            jf.addRow("Bridge width:", self.spin_bridge)
+            jf.addRow("Bridges per knife:", self.spin_count)
+            jf.addRow(self.check_imprint)
+            jf.addRow("Shorter by:", self.spin_short)
+            left.addWidget(many_grp)
+
             mesh_grp = QtWidgets.QGroupBox("Mesh")
             mf = QtWidgets.QFormLayout(mesh_grp)
             self.spin_defl = self._spin("Deflection", 0.02, 0.002, 1.0, 0.01, 3,
@@ -908,6 +1388,9 @@ def make_dialog(closed, opened):
                 self.btn_gen.setEnabled(False)
                 self._say(str(e), ok=False)
                 return
+            self.spin_bridge.setEnabled(self.combo_join.currentIndex() == JOIN_BRIDGES)
+            self.spin_count.setEnabled(self.combo_join.currentIndex() == JOIN_BRIDGES)
+            self.spin_short.setEnabled(self.check_imprint.isChecked())
             self.btn_gen.setEnabled(True)
             self._say("")
 
@@ -918,6 +1401,11 @@ def make_dialog(closed, opened):
             self.prefs.SetInt("Steps", self.spin_steps.value())
             self.prefs.SetBool("Inside", self.combo_side.currentIndex() == 1)
             self.prefs.SetBool("Flip", self.check_flip.isChecked())
+            self.prefs.SetInt("Join", self.combo_join.currentIndex())
+            self.prefs.SetFloat("BridgeWidth", self.spin_bridge.value())
+            self.prefs.SetInt("BridgeCount", self.spin_count.value())
+            self.prefs.SetBool("Imprint", self.check_imprint.isChecked())
+            self.prefs.SetFloat("ImprintShort", self.spin_short.value())
 
         # ── generate ──────────────────────────────────────────────────────────
 
@@ -934,7 +1422,12 @@ def make_dialog(closed, opened):
                 mesh = build_cutter(
                     wires_to_loops(self.closed, placement, defl), *dims,
                     inside=inside, defl=defl, steps=self.spin_steps.value(),
-                    open_paths=wires_to_loops(self.opened, placement, defl))
+                    open_paths=wires_to_loops(self.opened, placement, defl),
+                    join=self.combo_join.currentIndex(),
+                    bridge_width=self.spin_bridge.value(),
+                    bridge_count=self.spin_count.value(),
+                    imprint=self.check_imprint.isChecked(),
+                    imprint_short=self.spin_short.value())
             except Exception as e:
                 self._say(str(e), ok=False)
                 return
@@ -952,15 +1445,16 @@ def make_dialog(closed, opened):
             self._save()
 
             problems = mesh_report(mesh)
+            pieces = mesh_pieces(mesh)
             text = "\"{}\": {} facets, {:.2f} cm³".format(
                 feat.Label, mesh.CountFacets, mesh.Volume / 1000.0)
             if problems:
                 self._say(text + " — check the mesh: " + ", ".join(problems), ok=False)
-            elif self.closed and self.opened:
-                self._say(text + " — closed; the open lines are a shell of their "
-                          "own that overlaps the wall where they cross it.")
+            elif pieces > 1:
+                self._say(text + " — closed, but in {} separate pieces.".format(pieces),
+                          ok=False)
             else:
-                self._say(text + " — closed solid, ready to export.")
+                self._say(text + " — one closed solid, ready to export.")
 
     return CookieCutterDialog()
 

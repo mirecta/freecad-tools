@@ -238,6 +238,8 @@ Turns any planar curve into a printable cookie cutter mesh.
 | Six-value profile | Height, flange, straight wall and tapered cutting edge, previewed to scale in the dialog |
 | Tight curves | Built from true offsets of the curve, not a sweep — bends tighter than the profile is wide cannot fold the mesh over itself. Where the offsets run into each other the taper is refined until it follows the crease within the accuracy |
 | Outside or inside | The wall stands around the curve (cutter) or within it (stamp) |
+| Inner knives | A curve inside another cuts a hole, with the profile mirrored so the straight side still faces the cookie — or only imprints: a blunt, shorter wall centred on the curve |
+| One piece | Knives are joined on the flange side by bridges across the cookie or by a full plate |
 | Iterate | The dialog stays open; Generate replaces the previous result |
 
 #### Parameters
@@ -262,12 +264,17 @@ Turns any planar curve into a printable cookie cutter mesh.
 | D straight wall | 6 mm | Between the flange and the taper |
 | E cutting edge | 0.4 mm | 0 = knife edge |
 | F wall width | 1.2 mm | Where the taper starts |
+| Joined by | Bridges | Not joined · Bridges · Full plate |
+| Bridge width | 4 mm | Narrowed where a full-width bar does not fit |
+| Bridges per knife | 3 | One in each sector round the knife, narrowed where a full-width bar does not fit |
+| Inner curves only imprint | off | On: inner curves press a line instead of cutting a hole |
+| Shorter by | 3 mm | How much lower the imprint knives end than the cutting ones |
 | Accuracy | 0.02 mm | Largest distance between the curve and the facets |
 | Taper steps | 6 | Contours the taper is built from; only matters where the curve bends tighter than the wall is wide |
 
 The straight side **A** sits on the curve, so the cookie comes out exactly as drawn.  
 An open line gets a wall centred on it: E, F and B are then its full widths.  
-Open lines selected together with closed curves come out as a shell of their own in the same mesh; where they cross the wall the two overlap and the slicer joins them.
+Curves must not cross each other. Joined by bridges or a plate, open lines and imprint knives have no flange of their own.
 
 #### Output
 
