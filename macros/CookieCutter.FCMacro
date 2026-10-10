@@ -1,0 +1,994 @@
+# =============================================================================
+#  CookieCutter.FCMacro  v1
+#  –  Cookie cutter mesh from any planar curve
+# =============================================================================
+#
+#  WORKFLOW
+#  --------
+#  1. Select the curve: a sketch, any Draft object (line, wire, arc, B-spline…),
+#     a face, or single edges of any of them.  Several curves are fine — a ring
+#     cuts a donut, and open lines may be mixed in with closed ones.
+#  2. Run the macro and set the profile in the dialog — the inputs sit right
+#     on the drawing of the profile, each on the dimension it sets:
+#
+#              B                    A  total height
+#        ┌───────────┐              B  flange width (measured from the curve)
+#        │      ┌────┘ C            C  flange thickness
+#        │      │                   D  straight part of the wall under the flange
+#      A │      │ D                 E  width of the cutting edge
+#        │  F  ╱                    F  wall width where the taper starts
+#        │    ╱
+#        └───┘
+#          E
+#
+#     The straight side A sits on the curve, so the cookie comes out exactly
+#     the shape that was drawn.  The profile is printed flange-down: the flange
+#     lies in the plane of the curve, the cutting edge points along its normal.
+#
+#     An open line has no inside to keep clear, so its wall is centred on the
+#     line: E, F and B are then the full widths, half to each side.
+#  3. Click [Generate].  The dialog stays open — change a value and generate
+#     again, the previous result is replaced.
+#
+#  TIGHT CURVES
+#  ------------
+#  Sweeping the profile along the curve folds over itself wherever the curve
+#  bends tighter than the profile is wide.  So nothing is swept: the cutter is
+#  built from true offsets of the curve.  Every profile corner sits at some
+#  distance d from the curve, the offset at that d is one contour of the mesh,
+#  and the faces are stretched between neighbouring contours.  The offsets come
+#  from Clipper (Path.Area), which drops the folded parts, so pockets narrower
+#  than the flange simply fill up and the mesh stays a closed solid.
+#
+#  The taper is the one face that is neither flat nor vertical: its height
+#  follows the distance from the curve.  Where two offset fronts run into each
+#  other that distance has a crease (the bottom of a V between two walls), and
+#  no contour runs along it.  So the taper is refined after triangulation: any
+#  edge or facet that strays from the true distance by more than the accuracy
+#  is split, with the new point placed at its true height, until the creases
+#  are followed as closely as the curve itself.
+#
+# =============================================================================
+
+import FreeCAD
+import Part
+import Mesh
+import math
+
+V = FreeCAD.Vector
+
+EPS  = 1e-7
+GRID = 6        # decimals every contour point is snapped to
+CLOSE_TOL = 1e-3  # ends of an offset loop this close count as meeting
+PREF = "User parameter:BaseApp/Preferences/Macros/CookieCutter"
+
+
+class CutterError(Exception):
+    pass
+
+
+# ── polygons ──────────────────────────────────────────────────────────────────
+
+def loop_area(lp):
+    a = 0.0
+    for i in range(len(lp)):
+        x1, y1 = lp[i - 1]
+        x2, y2 = lp[i]
+        a += x1 * y2 - x2 * y1
+    return 0.5 * a
+
+
+def point_in_loop(p, lp):
+    x, y = p
+    inside = False
+    for i in range(len(lp)):
+        x1, y1 = lp[i - 1]
+        x2, y2 = lp[i]
+        if (y1 > y) != (y2 > y) and x < x1 + (y - y1) * (x2 - x1) / (y2 - y1):
+            inside = not inside
+    return inside
+
+
+def clean_path(pts, min_seg=1e-3):
+    """Snap to the grid and drop the points that fall together"""
+    out = []
+    for x, y in pts:
+        p = (round(x, GRID), round(y, GRID))
+        if not out or math.hypot(p[0] - out[-1][0], p[1] - out[-1][1]) > min_seg:
+            out.append(p)
+    return out if len(out) > 1 else None
+
+
+def clean_loop(pts, min_seg=1e-3):
+    out = clean_path(pts, min_seg) or []
+    while len(out) > 1 and math.hypot(out[0][0] - out[-1][0],
+                                      out[0][1] - out[-1][1]) <= min_seg:
+        out.pop()
+    if len(out) < 3 or abs(loop_area(out)) < 1e-8:
+        return None
+    return out
+
+
+def orient_loops(loops):
+    """Turn every loop so that the region it bounds lies on its left"""
+    out = []
+    for i, lp in enumerate(loops):
+        depth = sum(1 for j, other in enumerate(loops)
+                    if j != i and point_in_loop(lp[0], other))
+        ccw = loop_area(lp) > 0
+        out.append(lp if ccw == (depth % 2 == 0) else lp[::-1])
+    return out
+
+
+def wire_points(wire, defl):
+    """Wire -> list of Vectors, corners kept, curves within defl"""
+    chunks = []
+    for e in wire.OrderedEdges:
+        pts = e.discretize(Deflection=defl)
+        if len(pts) < 2:
+            pts = [e.valueAt(e.FirstParameter), e.valueAt(e.LastParameter)]
+        chunks.append(pts)
+    if len(chunks) > 1:
+        a, b = chunks[0], chunks[1]
+        if min(a[0].distanceToPoint(b[0]), a[0].distanceToPoint(b[-1])) < \
+           min(a[-1].distanceToPoint(b[0]), a[-1].distanceToPoint(b[-1])):
+            chunks[0] = a[::-1]
+    out = list(chunks[0])
+    for pts in chunks[1:]:
+        if out[-1].distanceToPoint(pts[-1]) < out[-1].distanceToPoint(pts[0]):
+            pts = pts[::-1]
+        out.extend(pts[1:])
+    return out
+
+
+def polygon_wire(lp):
+    return Part.makePolygon([V(x, y, 0) for x, y in lp] + [V(lp[0][0], lp[0][1], 0)])
+
+
+def region_faces(loops):
+    """Even-odd region of the loops as planar faces (holes and islands sorted out)"""
+    shape = Part.makeFace([polygon_wire(lp) for lp in loops],
+                          "Part::FaceMakerBullseye")
+    return shape.Faces
+
+
+class SegmentGrid:
+    """Distance from a point to the curve, for points no further than `reach`"""
+
+    def __init__(self, loops, closed, reach):
+        self.cell = reach
+        self.segs = []
+        self.cells = {}
+        for lp in loops:
+            for i in range(0 if closed else 1, len(lp)):
+                (x1, y1), (x2, y2) = lp[i - 1], lp[i]
+                k = len(self.segs)
+                self.segs.append((x1, y1, x2 - x1, y2 - y1,
+                                  (x2 - x1) ** 2 + (y2 - y1) ** 2))
+                for cx in range(self._cell(min(x1, x2)), self._cell(max(x1, x2)) + 1):
+                    for cy in range(self._cell(min(y1, y2)), self._cell(max(y1, y2)) + 1):
+                        self.cells.setdefault((cx, cy), []).append(k)
+
+    def _cell(self, v):
+        return int(math.floor(v / self.cell))
+
+    def distance(self, x, y):
+        cx, cy = self._cell(x), self._cell(y)
+        best = None
+        seen = set()
+        for ix in (cx - 1, cx, cx + 1):
+            for iy in (cy - 1, cy, cy + 1):
+                for k in self.cells.get((ix, iy), ()):
+                    if k in seen:
+                        continue
+                    seen.add(k)
+                    x1, y1, dx, dy, ll = self.segs[k]
+                    t = ((x - x1) * dx + (y - y1) * dy) / ll
+                    t = 0.0 if t < 0.0 else 1.0 if t > 1.0 else t
+                    d2 = (x - x1 - t * dx) ** 2 + (y - y1 - t * dy) ** 2
+                    if best is None or d2 < best:
+                        best = d2
+        return None if best is None else math.sqrt(best)
+
+
+# ── offset engines ────────────────────────────────────────────────────────────
+
+class AreaEngine:
+    """Clipper through Path.Area — ships with every FreeCAD that has CAM"""
+    name = "Path.Area (Clipper)"
+
+    def __init__(self, loops, defl, is_open=False):
+        import Path
+        self._Path = Path
+        self.defl = defl
+        self.is_open = is_open
+        self.plane = Part.makeCircle(1.0)
+        if is_open:
+            self.shape = Part.Compound(
+                [Part.makePolygon([V(x, y, 0) for x, y in lp]) for lp in loops])
+        else:
+            self.shape = Part.Compound(region_faces(loops))
+
+    def offset(self, d):
+        if self.is_open and abs(d) < EPS:
+            return []
+        area = self._Path.Area()
+        area.setParams(Coplanar=0, Fill=0, FitArcs=False, JoinType=0,
+                       Accuracy=self.defl, Deflection=self.defl)
+        area.setPlane(self.plane)   # a straight line would not span one
+        area.add(self.shape)
+        if abs(d) < EPS:
+            res = area.getShape()
+        else:
+            res = area.makeOffset(index=-1, offset=d)
+        if res is None or res.isNull():
+            return []
+        # Offsets come back arc-fitted whatever FitArcs says, and the fitting
+        # can leave the loop a hair short of closing — so go by the end points
+        # rather than by isClosed()
+        loops = []
+        for chain in Part.sortEdges(res.Edges):
+            pts = wire_points(Part.Wire(chain), self.defl)
+            if pts[0].distanceToPoint(pts[-1]) > CLOSE_TOL:
+                # better no mesh than one with a contour missing
+                raise CutterError(
+                    "The offset at {:.3f} mm came back open.".format(abs(d)))
+            loops.append([(p.x, p.y) for p in pts])
+        return loops
+
+
+class ShapelyEngine:
+    """GEOS buffer, for builds without the CAM workbench"""
+    name = "Shapely (GEOS)"
+
+    def __init__(self, loops, defl, is_open=False):
+        from shapely.geometry import Polygon, MultiLineString
+        self.defl = defl
+        self.is_open = is_open
+        if is_open:
+            self.region = MultiLineString(loops)
+            return
+        region = None
+        for lp in loops:            # even-odd, same as the faces above
+            poly = Polygon(lp).buffer(0)
+            region = poly if region is None else region.symmetric_difference(poly)
+        self.region = region
+
+    def offset(self, d):
+        if self.is_open and abs(d) < EPS:
+            return []
+        if abs(d) < EPS:
+            res = self.region
+        else:
+            step = 2.0 * math.acos(max(0.0, 1.0 - self.defl / abs(d)))
+            segs = max(4, int(math.ceil(0.5 * math.pi / step)))
+            # GEOS rounds every vertex of the curve, far finer than asked for
+            res = self.region.buffer(d, segs).simplify(0.5 * self.defl)
+        polys = getattr(res, "geoms", [res])
+        out = []
+        for poly in polys:
+            if poly.is_empty or poly.geom_type != "Polygon":
+                continue
+            out.append(list(poly.exterior.coords)[:-1])
+            out.extend(list(r.coords)[:-1] for r in poly.interiors)
+        return out
+
+
+def make_engine(loops, defl, is_open=False, prefer=None):
+    defl *= 0.25        # the curve was already cut within half the accuracy
+    errors = []
+    for cls in (AreaEngine, ShapelyEngine):
+        if prefer and cls.__name__ != prefer:
+            continue
+        try:
+            return cls(loops, defl, is_open)
+        except ImportError as e:
+            errors.append("{}: {}".format(cls.name, e))
+    raise CutterError("No 2-D offset engine available.\n" + "\n".join(errors))
+
+
+# ── cutter ────────────────────────────────────────────────────────────────────
+
+def profile_points(A, B, C, D, E, F):
+    """Profile outline as (distance from the curve, height), flange down,
+    walked counter-clockwise from the foot of the straight side"""
+    if not (A > EPS and F > EPS):
+        raise CutterError("Height A and wall width F must be greater than zero.")
+    if min(B, C, D, E) < 0:
+        raise CutterError("Dimensions cannot be negative.")
+    if E > F + EPS:
+        raise CutterError("Cutting edge E cannot be wider than the wall F.")
+    if C + D > A + EPS:
+        raise CutterError("C + D cannot be more than the total height A.")
+    if C > EPS and B > F + EPS:
+        pts = [(0.0, 0.0), (B, 0.0), (B, C), (F, C), (F, C + D), (E, A), (0.0, A)]
+    else:
+        pts = [(0.0, 0.0), (F, 0.0), (F, C + D), (E, A), (0.0, A)]
+    out = []
+    for p in pts:
+        if not out or abs(p[0] - out[-1][0]) > EPS or abs(p[1] - out[-1][1]) > EPS:
+            out.append(p)
+    return out
+
+
+class CutterBuilder:
+
+    def __init__(self, loops, inside=False, defl=0.02, steps=6, engine=None,
+                 is_open=False):
+        clean = clean_path if is_open else clean_loop
+        loops = [lp for lp in (clean(l) for l in loops) if lp]
+        if not loops:
+            raise CutterError("The line is too short." if is_open else
+                              "The curve encloses no area.")
+        self.inside = inside and not is_open
+        self.is_open = is_open
+        self.curve = loops
+        self.defl = defl
+        self.steps = max(1, int(steps))
+        self.engine = make_engine(loops, defl, is_open, engine)
+        self._levels = {}
+        self._grid = None
+        self._index = {}
+        self.points = []
+        self.facets = []
+
+    def contour(self, d):
+        """Boundary of everything within d of the cookie (of the line, when
+        it is open), solid side on the left"""
+        key = round(d, 7)
+        if key not in self._levels:
+            raw = self.engine.offset(-key if self.inside else key)
+            loops = orient_loops([lp for lp in (clean_loop(l) for l in raw) if lp])
+            if self.inside:
+                loops = [lp[::-1] for lp in loops]
+            self._levels[key] = loops
+        return self._levels[key]
+
+    def _vertex(self, x, y, z):
+        key = (x, y, round(z, GRID))
+        i = self._index.get(key)
+        if i is None:
+            i = self._index[key] = len(self.points)
+            self.points.append(V(x, y, z))
+        return i
+
+    def wall(self, d, z0, z1):
+        """Vertical face on contour d; faces away from the solid when z0 < z1"""
+        for lp in self.contour(d):
+            for i in range(len(lp)):
+                (px, py), (qx, qy) = lp[i - 1], lp[i]
+                a = self._vertex(px, py, z0)
+                b = self._vertex(qx, qy, z0)
+                c = self._vertex(qx, qy, z1)
+                e = self._vertex(px, py, z1)
+                self.facets.append((a, b, c))
+                self.facets.append((a, c, e))
+
+    def band(self, d0, z0, d1, z1, up):
+        """Face between contours d0 and d1, each at its own height"""
+        level = {}
+        for d in (d0, d1):
+            for lp in self.contour(d):
+                for p in lp:
+                    level[p] = d
+        loops = self.contour(d0) + self.contour(d1)
+        if not loops:
+            return
+        pts, index, tris = [], {}, []       # (x, y, distance), all facets ccw
+        for face in region_faces(loops):
+            fpts, ftris = face.tessellate(1.0)
+            ids = []
+            for p in fpts:
+                xy = (round(p.x, GRID), round(p.y, GRID))
+                if xy not in level:
+                    raise CutterError(
+                        "Triangulation added a point off the contours "
+                        "({:.4f}, {:.4f}).".format(p.x, p.y))
+                i = index.get(xy)
+                if i is None:
+                    i = index[xy] = len(pts)
+                    pts.append((xy[0], xy[1], level[xy]))
+                ids.append(i)
+            for a, b, c in ftris:
+                pa, pb, pc = fpts[a], fpts[b], fpts[c]
+                ccw = ((pb.x - pa.x) * (pc.y - pa.y)
+                       - (pb.y - pa.y) * (pc.x - pa.x)) > 0
+                tris.append((ids[a], ids[b], ids[c]) if ccw else
+                            (ids[a], ids[c], ids[b]))
+        if abs(z0 - z1) > EPS:
+            tris = self._follow_distance(pts, index, tris, min(d0, d1), max(d0, d1))
+        slope = (z1 - z0) / (d1 - d0)
+        ids = [self._vertex(x, y, z0 + (d - d0) * slope) for x, y, d in pts]
+        for a, b, c in tris:
+            if up:
+                self.facets.append((ids[a], ids[b], ids[c]))
+            else:
+                self.facets.append((ids[a], ids[c], ids[b]))
+
+    def _follow_distance(self, pts, index, tris, lo, hi):
+        """Split the edges and facets of a sloped band that cut across a
+        crease of the distance field, until none is off by more than the
+        accuracy.  Contour edges are shared with the neighbours and stay."""
+        if self._grid is None or self._grid.cell < hi:
+            self._grid = SegmentGrid(self.curve, not self.is_open,
+                                     max(hi * 1.05, 10.0 * self.defl))
+        grid, tol = self._grid, self.defl
+        min_len = 2.0 * tol
+
+        def dist(x, y):
+            d = grid.distance(x, y)
+            return hi if d is None or d > hi else lo if d < lo else d
+
+        near = {}       # points by cell, to keep new ones from crowding
+        crowd = 0.5 * tol
+
+        def cell_of(x, y):
+            return (int(math.floor(x / crowd)), int(math.floor(y / crowd)))
+
+        for i, (x, y, _d) in enumerate(pts):
+            near.setdefault(cell_of(x, y), []).append(i)
+
+        def add(x, y, d):
+            """New point, or None where one already sits: creases met from
+            several edges would otherwise pile up slivers"""
+            x, y = round(x, GRID), round(y, GRID)
+            cx, cy = cell_of(x, y)
+            for ix in (cx - 1, cx, cx + 1):
+                for iy in (cy - 1, cy, cy + 1):
+                    for i in near.get((ix, iy), ()):
+                        if math.hypot(pts[i][0] - x, pts[i][1] - y) < crowd:
+                            return None
+            index[(x, y)] = len(pts)
+            near.setdefault((cx, cy), []).append(len(pts))
+            pts.append((x, y, d))
+            return len(pts) - 1
+
+        good_edges, good_tris = set(), set()
+        for _ in range(100):
+            edges = {}
+            for t, (a, b, c) in enumerate(tris):
+                for u, v in ((a, b), (b, c), (c, a)):
+                    edges.setdefault((u, v) if u < v else (v, u), []).append(t)
+            busy, cuts, flips = set(), {}, {}
+            for key, ts in edges.items():
+                if len(ts) != 2 or key in good_edges:
+                    continue
+                if ts[0] in busy or ts[1] in busy:
+                    continue
+                (ux, uy, ud), (vx, vy, vd) = pts[key[0]], pts[key[1]]
+
+                def off(f):
+                    """How far the edge is from the true distance at f"""
+                    return abs(dist(ux + (vx - ux) * f, uy + (vy - uy) * f)
+                               - (ud + (vd - ud) * f))
+
+                worst, at = tol, None
+                if math.hypot(vx - ux, vy - uy) > min_len:
+                    for f in (0.5, 0.25, 0.75):
+                        e = off(f)
+                        if e > worst:
+                            worst, at = e, f
+                if at is None:
+                    good_edges.add(key)
+                    continue
+                # An edge across a crease is often just the wrong diagonal:
+                # the other one of its quad may run along the crease instead
+                w0, w1 = (next(i for i in tris[t] if i not in key) for t in ts)
+                (px, py, pd), (qx, qy, qd) = pts[w0], pts[w1]
+                su = (qx - px) * (uy - py) - (qy - py) * (ux - px)
+                sv = (qx - px) * (vy - py) - (qy - py) * (vx - px)
+                if su * sv < 0 and min(abs(su), abs(sv)) > min_len * min_len:
+                    alt = max(abs(dist(px + (qx - px) * f, py + (qy - py) * f)
+                                  - (pd + (qd - pd) * f)) for f in (0.5, 0.25, 0.75))
+                    if alt < 0.5 * worst:
+                        busy.update(ts)
+                        for t in ts:
+                            flips[t] = (key, w0, w1)
+                        continue
+                # the edge crosses a crease, and is furthest off right on it:
+                # close in on that point so the new vertex lands on the crease
+                f0, f1 = at - 0.25, at + 0.25
+                for _i in range(30):
+                    fa, fb = f0 + (f1 - f0) / 3.0, f1 - (f1 - f0) / 3.0
+                    if off(fa) < off(fb):
+                        f0 = fa
+                    else:
+                        f1 = fb
+                at = min(max(0.5 * (f0 + f1), 0.05), 0.95)
+                x, y = ux + (vx - ux) * at, uy + (vy - uy) * at
+                m = add(x, y, dist(x, y))
+                if m is None:
+                    good_edges.add(key)
+                    continue
+                busy.update(ts)
+                for t in ts:
+                    cuts[t] = (key, m)
+            for t, tri in enumerate(tris):
+                if t in busy or tri in good_tris:
+                    continue
+                (ax, ay, ad), (bx, by, bd), (cx, cy, cd) = (pts[i] for i in tri)
+                area2 = abs((bx - ax) * (cy - ay) - (by - ay) * (cx - ax))
+                x, y = (ax + bx + cx) / 3.0, (ay + by + cy) / 3.0
+                d = dist(x, y) if area2 > min_len * min_len else None
+                if d is None or abs(d - (ad + bd + cd) / 3.0) <= tol:
+                    good_tris.add(tri)
+                    continue
+                m = add(x, y, d)
+                if m is None:
+                    good_tris.add(tri)
+                    continue
+                cuts[t] = (None, m)
+            if not cuts and not flips:
+                break
+            out = []
+            for t, (a, b, c) in enumerate(tris):
+                if t in flips:
+                    key, w0, w1 = flips[t]
+                    while a in key:         # start at the corner off the edge
+                        a, b, c = b, c, a
+                    # keeps (corner, next, far corner): ccw, one from each side
+                    out.append((a, b, w1 if a == w0 else w0))
+                    continue
+                if t not in cuts:
+                    out.append((a, b, c))
+                    continue
+                key, m = cuts[t]
+                if key is None:
+                    out.extend(((a, b, m), (b, c, m), (c, a, m)))
+                    continue
+                while not (a in key and b in key):      # bring the cut edge first
+                    a, b, c = b, c, a
+                out.extend(((a, m, c), (m, b, c)))
+            tris = out
+        return tris
+
+    def build(self, profile):
+        n = len(profile)
+        for i in range(n):
+            (da, za), (db, zb) = profile[i], profile[(i + 1) % n]
+            if abs(da - db) < EPS:
+                self.wall(da, za, zb)
+                continue
+            k = self.steps if abs(za - zb) > EPS else 1
+            for j in range(k):
+                t0, t1 = j / float(k), (j + 1) / float(k)
+                self.band(da + (db - da) * t0, za + (zb - za) * t0,
+                          da + (db - da) * t1, za + (zb - za) * t1,
+                          up=db < da)
+        if not self.facets:
+            raise CutterError("Nothing to build — the offsets came out empty.")
+        mesh = Mesh.Mesh((self.points, self.facets))
+        if mesh.Volume < 0:
+            mesh.flipNormals()
+        return mesh
+
+
+def build_cutter(loops, A, B, C, D, E, F, inside=False, defl=0.02, steps=6,
+                 engine=None, open_paths=()):
+    """Closed loops make one cutter around (or within) their region.  Open
+    paths get a wall centred on them, as a shell of its own in the same mesh"""
+    profile = profile_points(A, B, C, D, E, F)
+    mesh = Mesh.Mesh()
+    if loops:
+        mesh.addMesh(CutterBuilder(loops, inside, defl, steps, engine).build(profile))
+    if open_paths:
+        # a centred wall cannot end in a knife edge, it needs a top to close on
+        tip = min(max(0.5 * E, 2.0 * defl), 0.5 * F)
+        half = profile_points(A, 0.5 * B, C, D, tip, 0.5 * F)
+        mesh.addMesh(CutterBuilder(open_paths, False, defl, steps, engine,
+                                   is_open=True).build(half))
+    return mesh
+
+
+def mesh_report(mesh):
+    problems = []
+    if not mesh.isSolid():
+        problems.append("not closed")
+    if mesh.hasNonManifolds():
+        problems.append("non-manifold edges")
+    if mesh.countNonUniformOrientedFacets():
+        problems.append("inconsistent normals")
+    return problems
+
+
+# ── selection ─────────────────────────────────────────────────────────────────
+
+def selected_wires():
+    """Wires of whatever is selected, in global coordinates: (closed, open)"""
+    import FreeCADGui
+    wires = []
+    for sel in FreeCADGui.Selection.getSelectionEx():
+        subs = [s for s in sel.SubObjects if s.ShapeType in ("Face", "Edge", "Wire")]
+        if subs:
+            edges = []
+            for s in subs:
+                if s.ShapeType == "Edge":
+                    edges.append(s)
+                else:
+                    wires.extend(s.Wires)
+            for chain in Part.sortEdges(edges):
+                wires.append(Part.Wire(chain))
+            continue
+        shape = getattr(sel.Object, "Shape", None)
+        if shape is None or shape.isNull():
+            continue
+        if len(shape.Faces) > 1:
+            raise CutterError(
+                "\"{}\" has several faces — select the face (or its edges) "
+                "to trace.".format(sel.Object.Label))
+        # edges rather than Wires: a lone line or arc is a shape without a wire
+        wires.extend(Part.Wire(c) for c in Part.sortEdges(shape.Edges))
+    wires = [w for w in wires if w.Length > 1e-6]
+    if not wires:
+        raise CutterError("Select a curve first: a sketch, a Draft line or "
+                          "wire, a face, or some of their edges.")
+    return ([w for w in wires if w.isClosed()],
+            [w for w in wires if not w.isClosed()])
+
+
+def curve_plane(wires, flip=False):
+    """Placement whose XY plane holds the wires, Z being the cutting direction"""
+    plane = Part.Compound(wires).findPlane()
+    if plane is not None:
+        n, base = plane.Axis, plane.Position
+    else:
+        # straight lines span no plane of their own: stand the cutter as
+        # upright as the line allows
+        pts = [v.Point for w in wires for v in w.Vertexes]
+        base = pts[0]
+        u = max((p - base for p in pts), key=lambda v: v.Length)
+        if u.Length < 1e-9 or any((p - base).cross(u).Length > 1e-6 * u.Length
+                                  for p in pts):
+            raise CutterError("The selected curves do not lie in one plane.")
+        u.normalize()
+        n = max((a - u * a.dot(u) for a in (V(0, 0, 1), V(0, 1, 0))),
+                key=lambda v: v.Length)
+        n.normalize()
+    for c in (n.z, n.y, n.x):       # prefer the normal that points up
+        if abs(c) > 1e-9:
+            if c < 0:
+                n = n.negative()
+            break
+    if flip:
+        n = n.negative()
+    return FreeCAD.Placement(base, FreeCAD.Rotation(V(0, 0, 1), n))
+
+
+def wires_to_loops(wires, placement, defl):
+    inv = placement.inverse()
+    loops = []
+    for w in wires:
+        pts = [inv.multVec(p) for p in wire_points(w, 0.5 * defl)]
+        if max(abs(p.z) for p in pts) > 1e-3:
+            raise CutterError("The selected curves do not lie in one plane.")
+        loops.append([(p.x, p.y) for p in pts])
+    return loops
+
+
+# ── dialog ────────────────────────────────────────────────────────────────────
+
+def qt_modules():
+    try:
+        from PySide6 import QtWidgets, QtGui, QtCore
+    except ImportError:
+        try:
+            from PySide2 import QtWidgets, QtGui, QtCore
+        except ImportError:
+            from PySide import QtGui, QtCore
+            QtWidgets = QtGui
+    return QtWidgets, QtGui, QtCore
+
+
+def make_dialog(closed, opened):
+    import FreeCADGui
+    QtWidgets, QtGui, QtCore = qt_modules()
+
+    class ProfileView(QtWidgets.QWidget):
+        """The profile as it is dimensioned — flange on top, cutting edge down —
+        with each input sitting on the dimension it sets.  A fixed schematic,
+        not to scale, so the inputs stay put while the values change."""
+
+        # outline corners, in widget pixels
+        X0, XE, XF, XB = 150, 186, 216, 330     # curve side, edge, wall, flange
+        Y0, YC, YD, YA = 70, 120, 290, 400      # top, flange, taper start, tip
+        FIELD_W, FIELD_H = 92, 26
+
+        def __init__(self):
+            super().__init__()
+            self.setFixedSize(460, 490)
+
+        def place(self, spins):
+            """Put the six inputs A..F on their dimension lines"""
+            w, h = self.FIELD_W, self.FIELD_H
+            spots = {
+                "A": (self.X0 - 26 - w, (self.Y0 + self.YA) // 2 - h // 2),
+                "B": ((self.X0 + self.XB) // 2 - w // 2, self.Y0 - 22 - h),
+                "C": (self.XB + 24, (self.Y0 + self.YC) // 2 - h // 2),
+                "D": (self.XF + 26, (self.YC + self.YD) // 2 - h // 2),
+                "F": (self.XF + 26, self.YD - h // 2),
+                "E": ((self.X0 + self.XE) // 2 - w // 2, self.YA + 26),
+            }
+            for key, sp in spins.items():
+                sp.setParent(self)
+                sp.setGeometry(spots[key][0], spots[key][1], w, h)
+                sp.show()
+
+        def paintEvent(self, _):
+            p = QtGui.QPainter(self)
+            p.setRenderHint(QtGui.QPainter.Antialiasing)
+            p.fillRect(self.rect(), QtGui.QColor("#ffffff"))
+            X0, XE, XF, XB = self.X0, self.XE, self.XF, self.XB
+            Y0, YC, YD, YA = self.Y0, self.YC, self.YD, self.YA
+
+            p.setPen(QtGui.QPen(QtGui.QColor("#202020"), 2))
+            p.setBrush(QtGui.QColor("#f3d9a4"))
+            p.drawPolygon(QtGui.QPolygonF([QtCore.QPointF(x, y) for x, y in (
+                (X0, Y0), (XB, Y0), (XB, YC), (XF, YC), (XF, YD), (XE, YA), (X0, YA))]))
+
+            dim = QtGui.QPen(QtGui.QColor("#606060"), 1)
+            p.setPen(dim)
+
+            def measure(x1, y1, x2, y2):
+                """Dimension line with a tick at either end"""
+                p.drawLine(x1, y1, x2, y2)
+                if x1 == x2:
+                    p.drawLine(x1 - 4, y1, x1 + 4, y1)
+                    p.drawLine(x2 - 4, y2, x2 + 4, y2)
+                else:
+                    p.drawLine(x1, y1 - 4, x1, y1 + 4)
+                    p.drawLine(x2, y2 - 4, x2, y2 + 4)
+
+            measure(X0 - 14, Y0, X0 - 14, YA)       # A
+            measure(X0, Y0 - 12, XB, Y0 - 12)       # B
+            measure(XB + 12, Y0, XB + 12, YC)       # C
+            measure(XF + 12, YC, XF + 12, YD)       # D
+            measure(X0, YA + 12, XE, YA + 12)       # E
+            # F is measured inside the wall, a leader takes it out to its input
+            p.setPen(QtGui.QPen(QtGui.QColor("#606060"), 1, QtCore.Qt.DashLine))
+            p.drawLine(X0, YD, XF, YD)
+            p.setPen(dim)
+            p.drawLine(XF, YD, XF + 26, YD)
+            p.drawLine(X0 - 14, (Y0 + YA) // 2, X0 - 26, (Y0 + YA) // 2)
+            p.drawLine(XB + 12, (Y0 + YC) // 2, XB + 24, (Y0 + YC) // 2)
+            p.drawLine(XF + 12, (YC + YD) // 2, XF + 26, (YC + YD) // 2)
+            p.drawLine((X0 + XB) // 2, Y0 - 12, (X0 + XB) // 2, Y0 - 22)
+            p.drawLine((X0 + XE) // 2, YA + 12, (X0 + XE) // 2, YA + 26)
+
+            p.setPen(QtGui.QColor("#808080"))
+            p.drawText(QtCore.QRectF(0, self.height() - 22, self.width(), 18),
+                       QtCore.Qt.AlignCenter,
+                       "the curve runs along the left side  ·  not to scale")
+
+    class CookieCutterDialog(QtWidgets.QDialog):
+
+        def __init__(self):
+            super().__init__(FreeCADGui.getMainWindow())
+            self.closed = closed
+            self.opened = opened
+            self.result_name = None
+            self.prefs = FreeCAD.ParamGet(PREF)
+            self.setWindowTitle("Cookie Cutter  v1")
+            self.setWindowFlags(QtCore.Qt.Window | QtCore.Qt.WindowStaysOnTopHint)
+            self._build_ui()
+            self._on_changed()
+
+        # ── UI ────────────────────────────────────────────────────────────────
+
+        def _spin(self, key, default, lo, hi, step=0.1, decimals=2, tip=""):
+            sp = QtWidgets.QDoubleSpinBox()
+            sp.setRange(lo, hi)
+            sp.setDecimals(decimals)
+            sp.setSingleStep(step)
+            sp.setSuffix(" mm")
+            sp.setValue(self.prefs.GetFloat(key, default))
+            sp.setToolTip(tip)
+            sp.valueChanged.connect(self._on_changed)
+            return sp
+
+        def _build_ui(self):
+            root = QtWidgets.QVBoxLayout(self)
+            root.setSpacing(8)
+
+            lines = []
+            if self.closed:
+                lines.append(
+                    "<b>{} closed curve{}</b>, {:.1f} mm around — the straight "
+                    "side of the profile follows the curve.".format(
+                        len(self.closed), "" if len(self.closed) == 1 else "s",
+                        sum(w.Length for w in self.closed)))
+            if self.opened:
+                lines.append(
+                    "<b>{} open line{}</b>, {:.1f} mm long — the wall is centred "
+                    "on the line, the three widths are its full widths.".format(
+                        len(self.opened), "" if len(self.opened) == 1 else "s",
+                        sum(w.Length for w in self.opened)))
+            lines.append("The flange lies in the plane of the curve, the cutting "
+                         "edge rises from it.")
+            root.addWidget(self._banner("<br>".join(lines)))
+
+            row = QtWidgets.QHBoxLayout()
+            root.addLayout(row)
+
+            self.spin_A = self._spin("A", 15.0, 0.1, 500.0, 0.5,
+                                     tip="A — total height of the cutter")
+            self.spin_B = self._spin("B", 5.0, 0.0, 200.0, 0.5,
+                                     tip="B — flange width, measured from the curve.\n"
+                                         "Not wider than F = no flange.")
+            self.spin_C = self._spin("C", 1.2, 0.0, 100.0,
+                                     tip="C — flange thickness.  0 = no flange.")
+            self.spin_D = self._spin("D", 6.0, 0.0, 500.0, 0.5,
+                                     tip="D — straight part of the wall between "
+                                         "the flange and the taper")
+            self.spin_E = self._spin("E", 0.4, 0.0, 50.0, 0.05,
+                                     tip="E — width of the cutting edge.  "
+                                         "0 = knife edge.")
+            self.spin_F = self._spin("F", 1.2, 0.05, 50.0,
+                                     tip="F — wall width where the taper starts")
+            self.view = ProfileView()
+            self.view.place({"A": self.spin_A, "B": self.spin_B, "C": self.spin_C,
+                             "D": self.spin_D, "E": self.spin_E, "F": self.spin_F})
+            row.addWidget(self.view)
+
+            left = QtWidgets.QVBoxLayout()
+            row.addLayout(left)
+
+            place_grp = QtWidgets.QGroupBox("Placement")
+            lf = QtWidgets.QFormLayout(place_grp)
+            self.combo_side = QtWidgets.QComboBox()
+            self.combo_side.addItems(["Outside the curve", "Inside the curve"])
+            self.combo_side.setCurrentIndex(1 if self.prefs.GetBool("Inside", False) else 0)
+            self.combo_side.setEnabled(bool(self.closed))
+            self.combo_side.setToolTip(
+                "Outside: the cutter stands around the curve and cuts out\n"
+                "exactly the drawn shape.\n"
+                "Inside: the cutter stands within the curve — a stamp, or the\n"
+                "wall of a hole.")
+            self.check_flip = QtWidgets.QCheckBox("Flip cutting direction")
+            self.check_flip.setChecked(self.prefs.GetBool("Flip", False))
+            lf.addRow("Wall and flange:", self.combo_side)
+            lf.addRow(self.check_flip)
+            left.addWidget(place_grp)
+
+            mesh_grp = QtWidgets.QGroupBox("Mesh")
+            mf = QtWidgets.QFormLayout(mesh_grp)
+            self.spin_defl = self._spin("Deflection", 0.02, 0.002, 1.0, 0.01, 3,
+                                        tip="Largest distance between the curve "
+                                            "and the facets that follow it")
+            self.spin_steps = QtWidgets.QSpinBox()
+            self.spin_steps.setRange(1, 64)
+            self.spin_steps.setValue(self.prefs.GetInt("Steps", 6))
+            self.spin_steps.setToolTip(
+                "Contours the taper is built from.  More of them follow the\n"
+                "creases closer where the curve bends tighter than the wall\n"
+                "is wide; elsewhere it makes no difference.")
+            mf.addRow("Accuracy:", self.spin_defl)
+            mf.addRow("Taper steps:", self.spin_steps)
+            left.addWidget(mesh_grp)
+            left.addStretch()
+
+            self.status = QtWidgets.QLabel("")
+            self.status.setWordWrap(True)
+            root.addWidget(self.status)
+
+            btn_row = QtWidgets.QHBoxLayout()
+            self.btn_gen = QtWidgets.QPushButton("Generate")
+            self.btn_gen.setDefault(True)
+            self.btn_gen.clicked.connect(self._on_generate)
+            btn_close = QtWidgets.QPushButton("Close")
+            btn_close.clicked.connect(self.accept)
+            btn_row.addStretch()
+            btn_row.addWidget(self.btn_gen)
+            btn_row.addWidget(btn_close)
+            root.addLayout(btn_row)
+
+        def _banner(self, html):
+            lbl = QtWidgets.QLabel(html)
+            lbl.setStyleSheet(
+                "background:#fffbe6; border:1px solid #f0c040;"
+                "border-radius:4px; padding:6px;")
+            lbl.setWordWrap(True)
+            return lbl
+
+        def _say(self, text, ok=True):
+            self.status.setStyleSheet("color:{};".format("#1b6e1b" if ok else "#b00020"))
+            self.status.setText(text)
+
+        # ── values ────────────────────────────────────────────────────────────
+
+        def _dims(self):
+            return tuple(sp.value() for sp in (
+                self.spin_A, self.spin_B, self.spin_C,
+                self.spin_D, self.spin_E, self.spin_F))
+
+        def _on_changed(self, _=None):
+            dims = self._dims()
+            try:
+                profile_points(*dims)
+            except CutterError as e:
+                self.btn_gen.setEnabled(False)
+                self._say(str(e), ok=False)
+                return
+            self.btn_gen.setEnabled(True)
+            self._say("")
+
+        def _save(self):
+            for key, v in zip("ABCDEF", self._dims()):
+                self.prefs.SetFloat(key, v)
+            self.prefs.SetFloat("Deflection", self.spin_defl.value())
+            self.prefs.SetInt("Steps", self.spin_steps.value())
+            self.prefs.SetBool("Inside", self.combo_side.currentIndex() == 1)
+            self.prefs.SetBool("Flip", self.check_flip.isChecked())
+
+        # ── generate ──────────────────────────────────────────────────────────
+
+        def _on_generate(self):
+            dims = self._dims()
+            defl = self.spin_defl.value()
+            inside = self.combo_side.currentIndex() == 1
+            self._say("Working…")
+            QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+            QtWidgets.QApplication.processEvents()
+            try:
+                placement = curve_plane(self.closed + self.opened,
+                                        self.check_flip.isChecked())
+                mesh = build_cutter(
+                    wires_to_loops(self.closed, placement, defl), *dims,
+                    inside=inside, defl=defl, steps=self.spin_steps.value(),
+                    open_paths=wires_to_loops(self.opened, placement, defl))
+            except Exception as e:
+                self._say(str(e), ok=False)
+                return
+            finally:
+                QtWidgets.QApplication.restoreOverrideCursor()
+
+            doc = FreeCAD.ActiveDocument
+            feat = doc.getObject(self.result_name) if self.result_name else None
+            if feat is None:
+                feat = doc.addObject("Mesh::Feature", "CookieCutter")
+                self.result_name = feat.Name
+            feat.Mesh = mesh
+            feat.Placement = placement
+            doc.recompute()
+            self._save()
+
+            problems = mesh_report(mesh)
+            text = "\"{}\": {} facets, {:.2f} cm³".format(
+                feat.Label, mesh.CountFacets, mesh.Volume / 1000.0)
+            if problems:
+                self._say(text + " — check the mesh: " + ", ".join(problems), ok=False)
+            elif self.closed and self.opened:
+                self._say(text + " — closed; the open lines are a shell of their "
+                          "own that overlaps the wall where they cross it.")
+            else:
+                self._say(text + " — closed solid, ready to export.")
+
+    return CookieCutterDialog()
+
+
+# ── entry point ───────────────────────────────────────────────────────────────
+
+def run():
+    QtWidgets, QtGui, QtCore = qt_modules()
+
+    if not FreeCAD.ActiveDocument:
+        QtWidgets.QMessageBox.warning(
+            None, "Cookie Cutter",
+            "No active document.\nOpen a document and select a closed curve first.")
+        return
+    try:
+        closed, opened = selected_wires()
+        curve_plane(closed + opened)
+    except CutterError as e:
+        QtWidgets.QMessageBox.warning(None, "Cookie Cutter", str(e))
+        return
+
+    dlg = make_dialog(closed, opened)
+    dlg.show()
+
+    loop = QtCore.QEventLoop()
+    dlg.finished.connect(loop.quit)
+    (getattr(loop, "exec", None) or loop.exec_)()
+
+
+if FreeCAD.GuiUp:
+    run()

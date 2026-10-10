@@ -226,6 +226,57 @@ The **N per arc** value shown in the Computed panel is the exact number to enter
 
 ---
 
+### CookieCutter — Cookie Cutter Mesh Generator
+
+Turns any planar curve into a printable cookie cutter mesh.
+
+#### Features
+
+| | |
+|---|---|
+| Any curve | A sketch, any Draft object, a face, or single edges of them — closed or open, several at once |
+| Six-value profile | Height, flange, straight wall and tapered cutting edge, previewed to scale in the dialog |
+| Tight curves | Built from true offsets of the curve, not a sweep — bends tighter than the profile is wide cannot fold the mesh over itself. Where the offsets run into each other the taper is refined until it follows the crease within the accuracy |
+| Outside or inside | The wall stands around the curve (cutter) or within it (stamp) |
+| Iterate | The dialog stays open; Generate replaces the previous result |
+
+#### Parameters
+
+```
+          B
+    ┌───────────┐
+    │      ┌────┘ C
+    │      │
+  A │      │ D
+    │  F  ╱
+    │    ╱
+    └───┘
+      E
+```
+
+| Parameter | Default | Notes |
+|---|---|---|
+| A total height | 15 mm | |
+| B flange width | 5 mm | Measured from the curve; not wider than F = no flange |
+| C flange thickness | 1.2 mm | 0 = no flange |
+| D straight wall | 6 mm | Between the flange and the taper |
+| E cutting edge | 0.4 mm | 0 = knife edge |
+| F wall width | 1.2 mm | Where the taper starts |
+| Accuracy | 0.02 mm | Largest distance between the curve and the facets |
+| Taper steps | 6 | Contours the taper is built from; only matters where the curve bends tighter than the wall is wide |
+
+The straight side **A** sits on the curve, so the cookie comes out exactly as drawn.  
+An open line gets a wall centred on it: E, F and B are then its full widths.  
+Open lines selected together with closed curves come out as a shell of their own in the same mesh; where they cross the wall the two overlap and the slicer joins them.
+
+#### Output
+
+`Mesh::Feature` named `CookieCutter`, flange in the plane of the curve — ready for STL export.
+
+Needs the CAM workbench (`Path.Area`, part of the standard FreeCAD build) or Shapely for the offsets.
+
+---
+
 ## License
 
 MIT
